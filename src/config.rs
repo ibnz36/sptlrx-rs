@@ -1,6 +1,5 @@
 use serde::Deserialize;
 use std::fs;
-use std::path::PathBuf;
 
 use crate::theme::{hex_to_color, Theme};
 
@@ -47,7 +46,7 @@ impl Config {
         let mut theme = match self.theme.as_deref() {
             Some("custom") => Theme::catppuccin_mocha(), // Base para override
             Some(name) => Theme::get_by_name(name),
-            None => Theme::catppuccin_mocha(),
+            _ => Theme::catppuccin_mocha(),
         };
 
         // Sobreescribir con custom si existe y se eligió 'custom'

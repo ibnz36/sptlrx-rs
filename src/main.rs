@@ -2,6 +2,7 @@ mod config;
 mod fetcher;
 mod lyrics;
 mod mpris;
+mod raw;
 mod theme;
 mod ticker;
 mod ui;
@@ -59,12 +60,23 @@ async fn main() -> anyhow::Result<()> {
     // Actor Fetcher: descarga letras de LRCLIB al cambiar de canción.
     tokio::spawn(fetcher::run(fetch_rx, tx.clone()));
 
-    // Cargar configuración (temas, etc)
-    let config = config::Config::load();
-    let theme = config.get_theme();
+    let mut is_raw = false;
+    for arg in std::env::args() {
+        if arg == "--raw" {
+            is_raw = true;
+        }
+    }
 
-    // Loop de UI: bloquea el hilo principal hasta que el usuario salga.
-    ui::run(rx, theme).await?;
+    if is_raw {
+        raw::run(rx).await?;
+    } else {
+        // Cargar configuración (temas, etc) solo si usamos TUI
+        let config = config::Config::load();
+        let theme = config.get_theme();
+
+        // Loop de UI: bloquea el hilo principal hasta que el usuario salga.
+        ui::run(rx, theme).await?;
+    }
 
     Ok(())
 }

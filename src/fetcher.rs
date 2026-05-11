@@ -3,6 +3,10 @@ use std::time::Duration;
 use serde::Deserialize;
 use tokio::sync::mpsc::{Receiver, Sender};
 
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
+use std::path::PathBuf;
+
 use crate::{lyrics::parse_lrc, AppEvent, TrackInfo};
 
 // ── Respuesta de LRCLIB ───────────────────────────────────────────────────────
@@ -16,7 +20,7 @@ struct LrcLibResult {
 // ── Limpieza de strings ───────────────────────────────────────────────────────
 
 /// Patrones de ruido dentro de paréntesis/corchetes.
-const NOISE_WORDS: &[&str] = &[
+const NOISE_WORDS: [&str; 10] = [
     "remaster", "deluxe", "bonus", "explicit", "live",
     "anniversary", "edition", "expanded", "stereo", "mono",
 ];
@@ -107,6 +111,47 @@ async fn fetch_from_lrclib(
     None
 }
 
+async fn get_lyrics(client: &reqwest::Client, track: &TrackInfo) -> Option<String> {
+    let cache_path = get_cache_path(track);
+
+    // 1. Intentar leer de la caché
+    if let Some(path) = &cache_path {
+        if let Ok(content) = tokio::fs::read_to_string(path).await {
+            if !content.trim().is_empty() {
+                return Some(content);
+            }
+        }
+    }
+
+    // 2. Fetch de LRCLIB
+    let lyrics_opt = fetch_from_lrclib(client, track).await;
+
+    // 3. Guardar en la caché
+    if let Some(lyrics) = &lyrics_opt {
+        if let Some(path) = &cache_path {
+            if let Some(parent) = path.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+            let _ = tokio::fs::write(path, lyrics).await;
+        }
+    }
+
+    lyrics_opt
+}
+
+fn get_cache_path(track: &TrackInfo) -> Option<PathBuf> {
+    let mut cache_dir = dirs::cache_dir()?;
+    cache_dir.push("sptlrx-rs");
+
+    let mut hasher = DefaultHasher::new();
+    track.artist.hash(&mut hasher);
+    track.title.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    cache_dir.push(format!("{:x}.lrc", hash));
+    Some(cache_dir)
+}
+
 // ── Actor principal ───────────────────────────────────────────────────────────
 
 /// Recibe `TrackInfo` del actor MPRIS, descarga letras de LRCLIB y envía
@@ -118,7 +163,7 @@ pub async fn run(mut rx: Receiver<TrackInfo>, tx: Sender<AppEvent>) {
         .user_agent("sptlrx-rs/0.1 (https://github.com/user/sptlrx-rs)")
         .timeout(Duration::from_secs(8))
         .build()
-        .expect("No se pudo crear el cliente HTTP");
+        .expect("Could not create HTTP client");
 
     let mut pending: Option<TrackInfo> = None;
 
@@ -129,7 +174,7 @@ pub async fn run(mut rx: Receiver<TrackInfo>, tx: Sender<AppEvent>) {
         } else {
             match rx.recv().await {
                 Some(t) => t,
-                None => break, // Canal cerrado
+                _ => break, // Canal cerrado
             }
         };
 
@@ -140,12 +185,12 @@ pub async fn run(mut rx: Receiver<TrackInfo>, tx: Sender<AppEvent>) {
         }
 
         // Fetch con cancelación: si llega un nuevo track, aborta la descarga
-        let fetch = fetch_from_lrclib(&client, &current);
+        let fetch = get_lyrics(&client, &current);
         tokio::select! {
             result = fetch => {
                 let lines = match result {
                     Some(lrc_text) => parse_lrc(&lrc_text),
-                    None => Vec::new(),
+                    _ => Vec::new(),
                 };
                 let _ = tx.send(AppEvent::Lyrics(lines)).await;
             }

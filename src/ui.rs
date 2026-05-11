@@ -9,7 +9,7 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Paragraph, Wrap},
     Frame, Terminal,
@@ -39,6 +39,8 @@ struct AppState {
     is_playing: bool,
     /// false = aún no hemos recibido una posición fiable (app recién iniciada)
     initial_sync_done: bool,
+    /// Desplazamiento visual para interpolación de color
+    visual_offset: f64,
 }
 
 impl AppState {
@@ -46,7 +48,7 @@ impl AppState {
         Self {
             theme,
             lyrics: Vec::new(),
-            track_title: String::from("Esperando Spotify..."),
+            track_title: String::from("Waiting for Spotify..."),
             track_artist: String::new(),
             duration_ms: 0,
             last_known_pos_ms: 0,
@@ -55,6 +57,7 @@ impl AppState {
             lyrics_loading: true,
             is_playing: false,
             initial_sync_done: false,
+            visual_offset: 0.0,
         }
     }
 
@@ -120,11 +123,38 @@ impl AppState {
     }
 }
 
-// ── Helpers de formato ────────────────────────────────────────────────────────
+// ── Format helpers ────────────────────────────────────────────────────────
 
+fn get_rgb(color: Color) -> (u8, u8, u8) {
+    match color {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (255, 255, 255), // Fallback
+    }
+}
 
+fn lerp_color(c1: Color, c2: Color, t: f64) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    let (r1, g1, b1) = get_rgb(c1);
+    let (r2, g2, b2) = get_rgb(c2);
+    let r = (r1 as f64 + (r2 as f64 - r1 as f64) * t) as u8;
+    let g = (g1 as f64 + (g2 as f64 - g1 as f64) * t) as u8;
+    let b = (b1 as f64 + (b2 as f64 - b1 as f64) * t) as u8;
+    Color::Rgb(r, g, b)
+}
 
-
+/// Devuelve un `Style` con degradado según la distancia a la línea activa.
+fn dim_style(distance: f64, theme: &Theme) -> Style {
+    let color = if distance < 1.0 {
+        lerp_color(theme.bright, theme.dim1, distance)
+    } else if distance < 2.0 {
+        lerp_color(theme.dim1, theme.dim2, distance - 1.0)
+    } else if distance < 3.0 {
+        lerp_color(theme.dim2, theme.dim3, distance - 2.0)
+    } else {
+        theme.dim3
+    };
+    Style::default().fg(color)
+}
 
 // ── Renderizado ───────────────────────────────────────────────────────────────
 
@@ -146,9 +176,9 @@ fn render(frame: &mut Frame, state: &AppState) {
 fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
     if state.lyrics.is_empty() {
         let msg = if state.lyrics_loading {
-            "⏳ Buscando letras..."
+            "⏳ Fetching lyrics..."
         } else {
-            "No se encontraron letras sincronizadas"
+            "No synced lyrics found"
         };
         let placeholder = Paragraph::new(msg)
             .style(Style::default().fg(state.theme.dim1).bg(state.theme.bg))
@@ -158,10 +188,15 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
     }
 
     let current = state.current_line.unwrap_or(0);
-    let lyric = &state.lyrics[current];
+    // Usar todo el espacio vertical disponible (mitad para arriba, mitad para abajo)
+    let context = (area.height as usize).saturating_div(2).saturating_sub(1);
 
+    let start = current.saturating_sub(context);
+    let end = (current + context + 1).min(state.lyrics.len());
+
+    let visible_lines = end - start;
     let available_height = area.height as usize;
-    let top_padding = available_height.saturating_sub(1) / 2;
+    let top_padding = available_height.saturating_sub(visible_lines) / 2;
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -170,15 +205,21 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
         lines.push(Line::from(""));
     }
 
-    // Solo la línea actual, sin indicador, centrada
-    lines.push(Line::from(vec![
-        Span::styled(
-            lyric.text.clone(),
-            Style::default()
-                .fg(state.theme.bright)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
+    for i in start..end {
+        let lyric = &state.lyrics[i];
+        let distance = (i as f64 - state.visual_offset).abs();
+
+        let mut line_style = dim_style(distance, &state.theme);
+        
+        // Línea más cercana al centro visual: negrita
+        if distance < 0.5 {
+            line_style = line_style.add_modifier(Modifier::BOLD);
+        }
+
+        lines.push(Line::from(vec![
+            Span::styled(lyric.text.clone(), line_style),
+        ]));
+    }
 
     let lyrics_widget = Paragraph::new(Text::from(lines))
         .alignment(Alignment::Center)
@@ -238,6 +279,10 @@ pub async fn run(mut rx: Receiver<AppEvent>, theme: Theme) -> anyhow::Result<()>
                 }
             }
         }
+
+        // Interpolación visual a 60fps
+        let target_offset = state.current_line.unwrap_or(0) as f64;
+        state.visual_offset += (target_offset - state.visual_offset) * 0.15;
 
         tokio::time::sleep(frame_duration).await;
     }
