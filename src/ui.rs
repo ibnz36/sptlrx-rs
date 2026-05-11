@@ -217,6 +217,9 @@ fn render(frame: &mut Frame, state: &AppState) {
     // Portada en la esquina superior izquierda
     render_album_art(frame, state, area);
     
+    // Info del track debajo de la portada
+    render_track_info(frame, state, area);
+    
     // Barra de progreso
     render_progress_bar(frame, state, progress_area);
 }
@@ -373,18 +376,69 @@ fn render_album_art(frame: &mut Frame, state: &AppState, area: Rect) {
     }
 }
 
+fn render_track_info(frame: &mut Frame, state: &AppState, area: Rect) {
+    let block_width = 24;
+    let block_height = 12;
+    
+    // Si la portada no cabe, la info tampoco
+    if area.width < block_width + 6 || area.height < block_height + 4 {
+        return;
+    }
+
+    let info_area = Rect {
+        x: area.x + 3,
+        y: area.y + 2 + block_height + 1, // Un poco por debajo de la portada
+        width: block_width,
+        height: 3,
+    };
+    
+    if info_area.y + info_area.height > area.y + area.height {
+        return; // No cabe verticalmente
+    }
+
+    let status_icon = if state.is_playing { "▶" } else { "⏸" };
+    let title_line = Line::from(vec![
+        Span::styled(format!("{} ", status_icon), Style::default().fg(state.theme.bright)),
+        Span::styled(&state.track_title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+    ]);
+    
+    let artist_line = Line::from(Span::styled(&state.track_artist, Style::default().fg(state.theme.dim1)));
+
+    let widget = Paragraph::new(vec![title_line, artist_line])
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: false });
+        
+    frame.render_widget(widget, info_area);
+}
+
+fn format_time(ms: u64) -> String {
+    let seconds = ms / 1000;
+    let mins = seconds / 60;
+    let secs = seconds % 60;
+    format!("{:02}:{:02}", mins, secs)
+}
+
 fn render_progress_bar(frame: &mut Frame, state: &AppState, area: Rect) {
     if state.duration_ms == 0 {
         return;
     }
 
-    let progress = (state.interpolated_pos_ms() as f64 / state.duration_ms as f64).clamp(0.0, 1.0);
+    let pos_ms = state.interpolated_pos_ms();
+    let progress = (pos_ms as f64 / state.duration_ms as f64).clamp(0.0, 1.0);
     
+    let time_curr = format_time(pos_ms);
+    let time_total = format_time(state.duration_ms);
+    
+    let text_width = 14; // "MM:SS  " y "  MM:SS" (7 cada uno)
     let width = area.width as usize;
-    if width == 0 { return; }
-
-    let filled_width = (width as f64 * progress).round() as usize;
+    if width <= text_width { return; }
+    
+    let bar_width = width - text_width;
+    let filled_width = (bar_width as f64 * progress).round() as usize;
     let mut line_spans = Vec::new();
+    
+    // Tiempo actual
+    line_spans.push(Span::styled(format!("{}  ", time_curr), Style::default().fg(state.theme.dim1)));
     
     // Braille progress
     if filled_width > 0 {
@@ -394,13 +448,16 @@ fn render_progress_bar(frame: &mut Frame, state: &AppState, area: Rect) {
         ));
     }
     
-    let empty_width = width.saturating_sub(filled_width);
+    let empty_width = bar_width.saturating_sub(filled_width);
     if empty_width > 0 {
         line_spans.push(Span::styled(
             "⣀".repeat(empty_width),
             Style::default().fg(state.theme.dim3)
         ));
     }
+    
+    // Tiempo total
+    line_spans.push(Span::styled(format!("  {}", time_total), Style::default().fg(state.theme.dim1)));
 
     frame.render_widget(Paragraph::new(Line::from(line_spans)), area);
 }
@@ -447,11 +504,28 @@ pub async fn run(mut rx: Receiver<AppEvent>, theme: Theme) -> anyhow::Result<()>
         // ── Eventos de teclado (non-blocking) ─────────────────────────────
         if event::poll(Duration::from_millis(0))? {
             if let Event::Key(key) = event::read()? {
-                let quit = matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
-                    || (key.code == KeyCode::Char('c')
-                        && key.modifiers.contains(KeyModifiers::CONTROL));
-                if quit {
-                    break;
+                // Solo reaccionar a presionar la tecla (evita dobles acciones)
+                if key.kind == event::KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => break,
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
+                        KeyCode::Char(' ') => {
+                            crate::mpris::toggle_play_pause().await;
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') => {
+                            crate::mpris::next_track().await;
+                        }
+                        KeyCode::Char('p') | KeyCode::Char('P') => {
+                            crate::mpris::previous_track().await;
+                        }
+                        KeyCode::Right => {
+                            crate::mpris::seek_relative(5_000_000).await;
+                        }
+                        KeyCode::Left => {
+                            crate::mpris::seek_relative(-5_000_000).await;
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
@@ -463,10 +537,13 @@ pub async fn run(mut rx: Receiver<AppEvent>, theme: Theme) -> anyhow::Result<()>
         
         if let Some(curr) = state.current_line {
             if let (Some(curr_lyric), Some(next_lyric)) = (state.lyrics.get(curr), state.lyrics.get(curr + 1)) {
-                // Si pasaron 5s y faltan >10s
-                if pos > curr_lyric.timestamp_ms + 5000 && next_lyric.timestamp_ms > pos + 10000 {
-                    state.is_instrumental = true;
-                    target_offset += 0.5; // Apuntar visualmente al medio
+                // Si la distancia total entre actual y siguiente es > 15s
+                if next_lyric.timestamp_ms.saturating_sub(curr_lyric.timestamp_ms) > 15000 {
+                    // Si pasaron 5s de la actual, y faltan más de 2s para la siguiente
+                    if pos > curr_lyric.timestamp_ms + 5000 && pos + 2000 < next_lyric.timestamp_ms {
+                        state.is_instrumental = true;
+                        target_offset += 0.5; // Apuntar visualmente al medio
+                    }
                 }
             }
         }

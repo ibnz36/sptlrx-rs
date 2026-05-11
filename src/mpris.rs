@@ -29,6 +29,59 @@ trait Player {
     /// El argumento es la nueva posición en microsegundos.
     #[dbus_proxy(signal)]
     fn seeked(&self, position: i64) -> zbus::Result<()>;
+
+    // ── Métodos de control interactivo ──
+    #[dbus_proxy(name = "PlayPause")]
+    fn play_pause_track(&self) -> zbus::Result<()>;
+    
+    #[dbus_proxy(name = "Next")]
+    fn next_track(&self) -> zbus::Result<()>;
+    
+    #[dbus_proxy(name = "Previous")]
+    fn previous_track(&self) -> zbus::Result<()>;
+    
+    #[dbus_proxy(name = "Seek")]
+    fn seek_track(&self, offset: i64) -> zbus::Result<()>;
+}
+
+pub async fn toggle_play_pause() {
+    tokio::spawn(async {
+        if let Ok(conn) = Connection::session().await {
+            if let Ok(player) = PlayerProxy::new(&conn).await {
+                let _ = player.play_pause_track().await;
+            }
+        }
+    });
+}
+
+pub async fn next_track() {
+    tokio::spawn(async {
+        if let Ok(conn) = Connection::session().await {
+            if let Ok(player) = PlayerProxy::new(&conn).await {
+                let _ = player.next_track().await;
+            }
+        }
+    });
+}
+
+pub async fn previous_track() {
+    tokio::spawn(async {
+        if let Ok(conn) = Connection::session().await {
+            if let Ok(player) = PlayerProxy::new(&conn).await {
+                let _ = player.previous_track().await;
+            }
+        }
+    });
+}
+
+pub async fn seek_relative(offset_us: i64) {
+    tokio::spawn(async move {
+        if let Ok(conn) = Connection::session().await {
+            if let Ok(player) = PlayerProxy::new(&conn).await {
+                let _ = player.seek_track(offset_us).await;
+            }
+        }
+    });
 }
 
 // ── Helpers para extraer tipos de OwnedValue ─────────────────────────────────
