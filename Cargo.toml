@@ -1,0 +1,29 @@
+[package]
+name = "sptlrx-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# El motor asíncrono (absolutamente necesario para no congelar la UI)
+tokio = { version = "1.35", features = ["full"] }
+
+# Para comunicarnos con Spotify de forma nativa
+zbus = "3.14"
+
+# Para dibujar la interfaz gráfica de terminal a 60fps
+ratatui = "0.26"
+crossterm = "0.27" 
+
+# Para descargar letras de LRCLIB (Fase 2)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+
+# Para iterar streams de señales DBus (Seeked)
+futures-util = "0.3"
+
+# Para manejar los errores limpiamente
+anyhow = "1.0"
+
+# Para parsear la configuración del tema y rutas (Fase 3: Rice)
+toml = "0.8"
+dirs = "6.0"
