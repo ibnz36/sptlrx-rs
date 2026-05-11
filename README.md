@@ -5,8 +5,12 @@
 A high-performance, low-latency Spotify synchronized lyrics client for Linux terminal environments.
 
 Built in Rust, `sptlrx-rs` leverages the MPRIS D-Bus interface and `tokio` asynchronous runtime to provide exact lyric synchronization without relying on Spotify's rate-limited Web API. The UI is designed to be completely borderless and distraction-free, making it ideal for integration into Wayland compositors (e.g., Hyprland) as a transparent floating widget.
+
 <img width="1091" height="642" alt="image" src="https://github.com/user-attachments/assets/ffb69c9f-6d1f-44dd-8f3f-cdeb4aba5afe" />
 
+<p align="center">
+  <img width="965" src="https://github.com/user-attachments/assets/4d2f0ba8-8ad4-4808-b4ba-687c93f9dd74" alt="Descripción descriptiva del cliente de líricas" />
+</p>
 
 ## Architecture
 
