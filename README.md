@@ -38,23 +38,47 @@ The system is built on a multi-actor model using `mpsc` channels to ensure the r
 
 ## Installation
 
-### Nix / NixOS (Recommended)
-If you are using Nix with flakes enabled, you can run it directly without installing anything:
+### 🚀 Quick Install (Recommended for most users)
+
+For most Linux users (Ubuntu, Fedora, Arch, etc.), the easiest way is to use the statically precompiled binary (featherweight, no system dependencies required). 
+
+Run the following block in your terminal:
+
 ```bash
-nix run github:tu-usuario/sptlrx-rs
-```
-Or build the static MUSL binary:
-```bash
-nix build github:tu-usuario/sptlrx-rs#static
+# 1. Download the latest portable binary
+curl -L -o sptlrx-rs https://github.com/Jirevelaz/sptlrx-rs/releases/latest/download/sptlrx-rs-portable
+
+# 2. Make it executable
+chmod +x sptlrx-rs
+
+# 3. Move it to your system PATH (requires privileges)
+sudo mv sptlrx-rs /usr/local/bin/
 ```
 
-### Cargo (Other Linux Distros)
+### 🛠️ Advanced Installation & Development (Nix / Rust)
+
+This project guarantees deterministic reproducibility using **Nix Flakes**. If you are a developer or a NixOS user, you don't need to install global C or Rust dependencies on your system.
+
+**Ephemeral execution without installation:**
+You can compile and test the tool directly from this repository without leaving a trace on your system:
 ```bash
-git clone [https://github.com/tu-usuario/sptlrx-rs](https://github.com/tu-usuario/sptlrx-rs)
-cd sptlrx-rs
-cargo build --release
-./target/release/sptlrx-rs
+nix run github:Jirevelaz/sptlrx-rs
 ```
+
+**Isolated development environment:**
+To modify the source code, compile locally, or submit a Pull Request:
+```bash
+# Clone the repository
+git clone https://github.com/Jirevelaz/sptlrx-rs.git
+cd sptlrx-rs
+
+# Spin up the pure development environment (installs Rust, Cargo, and dependencies automatically)
+nix develop
+
+# Compile and run the project
+cargo run
+```
+*(Note: The static production build with full MUSL support and UPX compression is handled via `nix build .#static`).*
 
 ## Configuration & Theming
 
