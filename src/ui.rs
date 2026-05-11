@@ -241,11 +241,16 @@ fn render(frame: &mut Frame, state: &AppState) {
         
     } else if show_full_ui {
         // ── CASO: SIDE-BY-SIDE (Reproductor completo con letras) ──
+        // Restaurar margen izquierdo pegado (al gusto del usuario)
         lyrics_area.x += art_width + 8;
         lyrics_area.width = lyrics_area.width.saturating_sub(art_width + 12);
-        
-        let art_rect = Rect { x: area.x + 3, y: area.y + 2, width: art_width, height: art_height };
-        let info_rect = Rect { x: area.x + 3, y: area.y + 2 + art_height + 1, width: art_width, height: 6 };
+
+        let total_block_height = art_height + 7; 
+        // Bajamos un poco más el offset vertical (+2) para que no se sienta "tan arriba"
+        let y_offset = (area.y + (area.height.saturating_sub(total_block_height)) / 2).saturating_add(2);
+
+        let art_rect = Rect { x: area.x + 3, y: y_offset, width: art_width, height: art_height };
+        let info_rect = Rect { x: area.x + 3, y: y_offset + art_height + 1, width: art_width, height: 6 };
 
         let safe_art = art_rect.intersection(area);
         let safe_info = info_rect.intersection(area);
@@ -313,16 +318,17 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
             let mut spans = Vec::with_capacity(lyric.text.chars().count());
             let len = lyric.text.chars().count() as f64;
             
-            // El centro del brillo viaja de izquierda a derecha continuamente
-            let sweep_center = (state.animation_time * 15.0).rem_euclid(len + 30.0) - 15.0;
+            // El centro del brillo viaja de izquierda a derecha continuamente (un poco más rápido)
+            let sweep_center = (state.animation_time * 10.0).rem_euclid(len + 30.0) - 10.0;
             
             for (char_idx, c) in lyric.text.chars().enumerate() {
                 let char_dist = (char_idx as f64 - sweep_center).abs();
-                let glow_intensity = (1.0 - char_dist / 4.0).clamp(0.0, 1.0);
+                // Radio de brillo un poco más amplio (5.0 en vez de 4.0)
+                let glow_intensity = (1.0 - char_dist / 5.0).clamp(0.0, 1.0);
                 
                 let char_color = if glow_intensity > 0.0 {
-                    // Mezclamos el color base (camaleón) con blanco puro para dar sensación de luz
-                    lerp_color(state.theme.bright, Color::Rgb(255, 255, 255), glow_intensity * 0.8)
+                    // Pico de brillo al 100% blanco para que "reluzca" de verdad
+                    lerp_color(state.theme.bright, Color::Rgb(255, 255, 255), glow_intensity)
                 } else {
                     state.theme.bright
                 };
