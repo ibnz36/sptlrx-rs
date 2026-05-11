@@ -135,92 +135,119 @@ fn get_track_id(metadata: &HashMap<String, OwnedValue>) -> Option<String> {
 /// 1. Pollea Metadata → PlaybackStatus → Position cada 100ms.
 /// 2. Escucha la señal DBus `Seeked` para detectar seeks al instante.
 pub async fn run(tx: Sender<AppEvent>, fetch_tx: Sender<TrackInfo>) {
-    let connection = match Connection::session().await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[mpris] No se pudo conectar a DBus: {e}");
-            return;
-        }
-    };
-
-    let player = match PlayerProxy::new(&connection).await {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("[mpris] No se pudo crear el proxy de Spotify: {e}");
-            return;
-        }
-    };
-
-    // Stream de señales Seeked (se dispara al hacer seek/rewind/forward)
-    let mut seeked_stream = match player.receive_seeked().await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[mpris] No se pudo escuchar señal Seeked: {e}");
-            return;
-        }
-    };
-
-    let mut last_track_id = String::new();
-    let mut interval = time::interval(Duration::from_millis(100));
-
     loop {
-        tokio::select! {
-            // ── Rama 1: Polling periódico (100ms) ─────────────────────────
-            _ = interval.tick() => {
-                // 1. Metadata: detectar cambio de canción PRIMERO
-                let mut track_just_changed = false;
-                if let Ok(meta) = player.metadata().await {
-                    if let Some(track_id) = get_track_id(&meta) {
-                        if track_id != last_track_id {
-                            last_track_id = track_id;
-                            track_just_changed = true;
+        let connection = match Connection::session().await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[mpris] No se pudo conectar a DBus: {e}. Reintentando en 2s...");
+                time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
 
-                            let title = get_str(&meta, "xesam:title")
-                                .unwrap_or_else(|| "Desconocido".to_string());
-                            let artist = get_str_array(&meta, "xesam:artist")
-                                .unwrap_or_else(|| "Artista desconocido".to_string());
-                            let duration_ms = get_i64(&meta, "mpris:length")
-                                .map(|us| (us / 1000) as u64)
-                                .unwrap_or(0);
-                            let art_url = get_str(&meta, "mpris:artUrl");
+        let player = match PlayerProxy::new(&connection).await {
+            Ok(p) => p,
+            Err(_) => {
+                // Spotify no está abierto, enviamos evento de "Esperando"
+                let _ = tx.send(AppEvent::TrackChanged(TrackInfo {
+                    title: "Waiting for Spotify...".to_string(),
+                    artist: String::new(),
+                    duration_ms: 0,
+                    art_url: None,
+                })).await;
+                time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
 
-                            let info = TrackInfo { title, artist, duration_ms, art_url: art_url.clone() };
-                            let _ = tx.send(AppEvent::TrackChanged(info.clone())).await;
-                            let _ = fetch_tx.send(info).await;
-                            
-                            if let Some(url) = art_url {
-                                let tx_clone = tx.clone();
-                                tokio::spawn(async move {
-                                    if let Some((color, img)) = crate::color_extractor::get_dominant_color(&url).await {
-                                        let _ = tx_clone.send(AppEvent::ArtProcessed(color, img)).await;
+        // Stream de señales Seeked (se dispara al hacer seek/rewind/forward)
+        let mut seeked_stream = match player.receive_seeked().await {
+            Ok(s) => s,
+            Err(_) => {
+                time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+
+        let mut last_track_id = String::new();
+        let mut interval = time::interval(Duration::from_millis(100));
+        let mut error_count = 0;
+
+        loop {
+            tokio::select! {
+                // ── Rama 1: Polling periódico (100ms) ─────────────────────────
+                _ = interval.tick() => {
+                    let mut track_just_changed = false;
+                    
+                    // Intentamos obtener metadata
+                    match player.metadata().await {
+                        Ok(meta) => {
+                            error_count = 0;
+                            if let Some(track_id) = get_track_id(&meta) {
+                                if track_id != last_track_id {
+                                    last_track_id = track_id;
+                                    track_just_changed = true;
+
+                                    let title = get_str(&meta, "xesam:title")
+                                        .unwrap_or_else(|| "Desconocido".to_string());
+                                    let artist = get_str_array(&meta, "xesam:artist")
+                                        .unwrap_or_else(|| "Artista desconocido".to_string());
+                                    let duration_ms = get_i64(&meta, "mpris:length")
+                                        .map(|us| (us / 1000) as u64)
+                                        .unwrap_or(0);
+                                    let art_url = get_str(&meta, "mpris:artUrl");
+
+                                    let info = TrackInfo { title, artist, duration_ms, art_url: art_url.clone() };
+                                    let _ = tx.send(AppEvent::TrackChanged(info.clone())).await;
+                                    let _ = fetch_tx.send(info).await;
+                                    
+                                    if let Some(url) = art_url {
+                                        let tx_clone = tx.clone();
+                                        tokio::spawn(async move {
+                                            if let Some((color, img)) = crate::color_extractor::get_dominant_color(&url).await {
+                                                let _ = tx_clone.send(AppEvent::ArtProcessed(color, img)).await;
+                                            }
+                                        });
                                     }
-                                });
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            error_count += 1;
+                        }
+                    }
+
+                    if error_count > 10 {
+                        // Si hay muchos errores seguidos, probablemente Spotify se cerró.
+                        // Salimos del loop interno para volver al loop de reconexión.
+                        break;
+                    }
+
+                    // 2. PlaybackStatus
+                    if let Ok(status) = player.playback_status().await {
+                        let _ = tx.send(AppEvent::Playing(status == "Playing")).await;
+                    }
+
+                    // 3. Position (skip si hubo cambio de canción)
+                    if !track_just_changed {
+                        if let Ok(pos_us) = player.position().await {
+                            if tx.send(AppEvent::Position(pos_us)).await.is_err() {
+                                return; // El canal se cerró, la app está cerrando
                             }
                         }
                     }
                 }
 
-                // 2. PlaybackStatus
-                if let Ok(status) = player.playback_status().await {
-                    let _ = tx.send(AppEvent::Playing(status == "Playing")).await;
-                }
-
-                // 3. Position (skip si hubo cambio de canción)
-                if !track_just_changed {
-                    if let Ok(pos_us) = player.position().await {
-                        if tx.send(AppEvent::Position(pos_us)).await.is_err() {
-                            break;
-                        }
+                // ── Rama 2: Señal Seeked (instantánea) ────────────────────────
+                Some(signal) = seeked_stream.next() => {
+                    if let Ok(args) = signal.args() {
+                        let _ = tx.send(AppEvent::Seeked(args.position)).await;
                     }
                 }
             }
-
-            // ── Rama 2: Señal Seeked (instantánea) ────────────────────────
-            Some(signal) = seeked_stream.next() => {
-                if let Ok(args) = signal.args() {
-                    let _ = tx.send(AppEvent::Seeked(args.position)).await;
-                }
-            }
         }
+        
+        // Esperamos un poco antes de intentar reconectar después de un fallo
+        time::sleep(Duration::from_secs(1)).await;
     }
 }

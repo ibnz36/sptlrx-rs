@@ -99,10 +99,15 @@ impl AppState {
                 }
             }
             AppEvent::Playing(playing) => {
-                if playing && !self.is_playing {
+                if playing != self.is_playing {
+                    // Al cambiar estado, re-anclamos la posición para evitar desincronización
+                    if !playing {
+                        // Si pausamos, capturamos el milisegundo exacto de la interpolación
+                        self.last_known_pos_ms = self.interpolated_pos_ms();
+                    }
                     self.last_sync_time = Instant::now();
+                    self.is_playing = playing;
                 }
-                self.is_playing = playing;
             }
             AppEvent::Seeked(pos_us) => {
                 let pos_ms = (pos_us.max(0) / 1000) as u64;
@@ -199,28 +204,63 @@ fn render(frame: &mut Frame, state: &AppState) {
     area.height = area.height.saturating_sub(1);
 
     let mut lyrics_area = area;
-    let art_width = 30; // 24 block_width + 6 padding
 
-    // Si hay portada y espacio suficiente, desplazamos las letras a la derecha
-    if state.album_art.is_some() && area.width > art_width + 20 {
-        lyrics_area.x += art_width + 4; // Añadir margen izquierdo extra
-        lyrics_area.width = lyrics_area.width.saturating_sub(art_width + 4);
+    // Matemática responsiva inteligente (Smart Scaling):
+    // El ancho intenta ser 1/3 de la pantalla, pero se ajusta si el alto es escaso.
+    let max_art_width = (area.width / 3).clamp(10, 30);
+    let max_art_height = (area.height.saturating_sub(8) as u16).max(5); // Reservar espacio para info/botones
+    
+    let art_width = max_art_width.min(max_art_height * 2);
+    let art_height = art_width / 2;
+
+    // Decidimos si hay espacio para el layout de "Reproductor Completo"
+    let show_full_ui = state.album_art.is_some() 
+        && area.width > art_width + 20 
+        && area.height > art_height + 6;
+
+    if state.lyrics.is_empty() && !state.lyrics_loading && state.album_art.is_some() {
+        // ── CASO: PORTADA CENTRADA (Sin letras encontradas) ──
+        // Matemática responsiva para el centro:
+        let max_w = (area.width / 2).clamp(20, 50).min(area.width.saturating_sub(4));
+        let max_h = (area.height.saturating_sub(8) as u16).max(5); 
+        
+        let centered_width = max_w.min(max_h * 2);
+        let centered_height = centered_width / 2;
+        
+        let x = (area.width.saturating_sub(centered_width)) / 2;
+        let y = (area.height.saturating_sub(centered_height + 6)) / 2;
+
+        let art_rect = Rect { x, y, width: centered_width, height: centered_height };
+        let info_rect = Rect { x: 0, y: y + centered_height + 1, width: area.width, height: 7 };
+
+        let safe_art = art_rect.intersection(area);
+        let safe_info = info_rect.intersection(area);
+
+        if safe_art.height > 0 { render_album_art_rect(frame, state, safe_art); }
+        if safe_info.height > 0 { render_track_info_rect(frame, state, safe_info, Alignment::Center); }
+        
+    } else if show_full_ui {
+        // ── CASO: SIDE-BY-SIDE (Reproductor completo con letras) ──
+        lyrics_area.x += art_width + 8;
+        lyrics_area.width = lyrics_area.width.saturating_sub(art_width + 12);
+        
+        let art_rect = Rect { x: area.x + 3, y: area.y + 2, width: art_width, height: art_height };
+        let info_rect = Rect { x: area.x + 3, y: area.y + 2 + art_height + 1, width: art_width, height: 6 };
+
+        let safe_art = art_rect.intersection(area);
+        let safe_info = info_rect.intersection(area);
+
+        render_lyrics(frame, state, lyrics_area);
+        if safe_art.height > 0 { render_album_art_rect(frame, state, safe_art); }
+        if safe_info.height > 0 { render_track_info_rect(frame, state, safe_info, Alignment::Center); }
     } else {
-        // Margen por defecto si está centrado
-        lyrics_area.x += 2;
+        // ── CASO: SOLO LETRAS (Minimalista) ──
+        lyrics_area.x = lyrics_area.x.saturating_add(2);
         lyrics_area.width = lyrics_area.width.saturating_sub(4);
+        render_lyrics(frame, state, lyrics_area);
     }
-
-    // Letras en pantalla (reducida o completa)
-    render_lyrics(frame, state, lyrics_area);
     
-    // Portada en la esquina superior izquierda
-    render_album_art(frame, state, area);
-    
-    // Info del track debajo de la portada
-    render_track_info(frame, state, area);
-    
-    // Barra de progreso
+    // Barra de progreso siempre visible
     render_progress_bar(frame, state, progress_area);
 }
 
@@ -321,11 +361,7 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
         }
     }
 
-    let alignment = if state.album_art.is_some() && area.width > 50 {
-        Alignment::Left
-    } else {
-        Alignment::Center
-    };
+    let alignment = Alignment::Center;
 
     let lyrics_widget = Paragraph::new(Text::from(lines))
         .alignment(alignment)
@@ -335,25 +371,10 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
     frame.render_widget(lyrics_widget, area);
 }
 
-fn render_album_art(frame: &mut Frame, state: &AppState, area: Rect) {
+fn render_album_art_rect(frame: &mut Frame, state: &AppState, art_area: Rect) {
     if let Some(img) = &state.album_art {
-        let block_width = 24; // 24 columnas
-        let block_height = 12; // 12 filas (24 pixeles de alto)
-        
-        // Si no hay suficiente espacio para la portada, no la dibujamos
-        if area.width < block_width + 6 || area.height < block_height + 4 {
-            return;
-        }
-
-        let art_area = Rect {
-            x: area.x + 3,
-            y: area.y + 2,
-            width: block_width,
-            height: block_height,
-        };
-
         // Redimensionar para encajar en los caracteres (FilterType::Triangle para velocidad/calidad)
-        let scaled = image::imageops::resize(img, block_width as u32, (block_height * 2) as u32, image::imageops::FilterType::Triangle);
+        let scaled = image::imageops::resize(img, art_area.width as u32, (art_area.height * 2) as u32, image::imageops::FilterType::Triangle);
         
         let mut lines = Vec::new();
         for y in (0..scaled.height()).step_by(2) {
@@ -376,36 +397,49 @@ fn render_album_art(frame: &mut Frame, state: &AppState, area: Rect) {
     }
 }
 
-fn render_track_info(frame: &mut Frame, state: &AppState, area: Rect) {
-    let block_width = 24;
-    let block_height = 12;
-    
-    // Si la portada no cabe, la info tampoco
-    if area.width < block_width + 6 || area.height < block_height + 4 {
-        return;
-    }
-
-    let info_area = Rect {
-        x: area.x + 3,
-        y: area.y + 2 + block_height + 1, // Un poco por debajo de la portada
-        width: block_width,
-        height: 3,
-    };
-    
-    if info_area.y + info_area.height > area.y + area.height {
-        return; // No cabe verticalmente
-    }
-
+fn render_track_info_rect(frame: &mut Frame, state: &AppState, info_area: Rect, alignment: Alignment) {
     let status_icon = if state.is_playing { "▶" } else { "⏸" };
     let title_line = Line::from(vec![
-        Span::styled(format!("{} ", status_icon), Style::default().fg(state.theme.bright)),
-        Span::styled(&state.track_title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(&state.track_title, Style::default().fg(state.theme.bright).add_modifier(Modifier::BOLD)),
     ]);
     
     let artist_line = Line::from(Span::styled(&state.track_artist, Style::default().fg(state.theme.dim1)));
 
-    let widget = Paragraph::new(vec![title_line, artist_line])
-        .alignment(Alignment::Left)
+    // Fila de botones de control (visual)
+    let controls_line = Line::from(vec![
+        Span::styled(" [P] ", Style::default().fg(state.theme.dim2)),
+        Span::styled("⏮ ", Style::default().fg(state.theme.dim1)),
+        Span::styled(format!(" {} ", status_icon), Style::default().fg(state.theme.bright).add_modifier(Modifier::REVERSED)),
+        Span::styled(" ⏭", Style::default().fg(state.theme.dim1)),
+        Span::styled(" [N] ", Style::default().fg(state.theme.dim2)),
+    ]);
+
+    let mut lines = Vec::new();
+    
+    // Solo añadir espacio superior si hay altura de sobra
+    if info_area.height > 5 {
+        lines.push(Line::from(""));
+    }
+    
+    lines.push(title_line);
+    lines.push(artist_line);
+
+    // Solo añadir separador si hay altura de sobra
+    if info_area.height > 6 {
+        lines.push(Line::from(""));
+    }
+    
+    lines.push(controls_line);
+    
+    if info_area.height > 4 {
+        lines.push(Line::from(vec![
+            Span::styled("[Space] to ", Style::default().fg(state.theme.dim3)),
+            Span::styled(if state.is_playing { "pause" } else { "play" }, Style::default().fg(state.theme.dim2)),
+        ]));
+    }
+
+    let widget = Paragraph::new(lines)
+        .alignment(alignment)
         .wrap(Wrap { trim: false });
         
     frame.render_widget(widget, info_area);
