@@ -43,6 +43,8 @@ struct AppState {
     initial_sync_done: bool,
     /// Desplazamiento visual para interpolación de color
     visual_offset: f64,
+    /// Tiempo de animación para efectos continuos
+    animation_time: f64,
 }
 
 impl AppState {
@@ -62,6 +64,7 @@ impl AppState {
             is_playing: false,
             initial_sync_done: false,
             visual_offset: 0.0,
+            animation_time: 0.0,
         }
     }
 
@@ -232,14 +235,51 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
 
         let mut line_style = dim_style(distance, &state.theme);
         
-        // Línea más cercana al centro visual: negrita
+        // Línea más cercana al centro visual: negrita + Glow Sweep
         if distance < 0.5 {
-            line_style = line_style.add_modifier(Modifier::BOLD);
+            let mut spans = Vec::with_capacity(lyric.text.chars().count());
+            let len = lyric.text.chars().count() as f64;
+            
+            // El centro del brillo viaja de izquierda a derecha continuamente
+            let sweep_center = (state.animation_time * 15.0).rem_euclid(len + 30.0) - 15.0;
+            
+            for (char_idx, c) in lyric.text.chars().enumerate() {
+                let char_dist = (char_idx as f64 - sweep_center).abs();
+                let glow_intensity = (1.0 - char_dist / 4.0).clamp(0.0, 1.0);
+                
+                let char_color = if glow_intensity > 0.0 {
+                    // Mezclamos el color base (camaleón) con blanco puro para dar sensación de luz
+                    lerp_color(state.theme.bright, Color::Rgb(255, 255, 255), glow_intensity * 0.8)
+                } else {
+                    state.theme.bright
+                };
+                
+                spans.push(Span::styled(c.to_string(), Style::default().fg(char_color).add_modifier(Modifier::BOLD)));
+            }
+            
+            lines.push(Line::from(spans));
+            
+        } else {
+            // Líneas de contexto: Bokeh Blur (desenfoque por profundidad)
+            let mut spans = Vec::with_capacity(lyric.text.chars().count());
+            
+            // A mayor distancia, mayor probabilidad de que un caracter se desenfoque (se vuelva '·')
+            let blur_prob = ((distance - 1.2) * 0.4).clamp(0.0, 0.95);
+            
+            for (char_idx, c) in lyric.text.chars().enumerate() {
+                // Generador pseudo-aleatorio determinista por coordenada (i, char_idx)
+                let seed = i.wrapping_mul(73856093).wrapping_add(char_idx.wrapping_mul(19349663));
+                let pseudo_rand = (seed % 1000) as f64 / 1000.0;
+                
+                if c != ' ' && pseudo_rand < blur_prob {
+                    spans.push(Span::styled("·", line_style));
+                } else {
+                    spans.push(Span::styled(c.to_string(), line_style));
+                }
+            }
+            
+            lines.push(Line::from(spans));
         }
-
-        lines.push(Line::from(vec![
-            Span::styled(lyric.text.clone(), line_style),
-        ]));
     }
 
     let lyrics_widget = Paragraph::new(Text::from(lines))
@@ -336,6 +376,7 @@ pub async fn run(mut rx: Receiver<AppEvent>, theme: Theme) -> anyhow::Result<()>
         // Interpolación visual a 60fps
         let target_offset = state.current_line.unwrap_or(0) as f64;
         state.visual_offset += (target_offset - state.visual_offset) * 0.15;
+        state.animation_time += 0.05;
 
         // Interpolación de color camaleón a 60fps
         if let Some(target) = state.target_bright {
