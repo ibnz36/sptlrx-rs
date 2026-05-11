@@ -312,61 +312,84 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
 
         let mut line_style = dim_style(distance, &state.theme);
         
-        // Estética: Cursiva para las líneas de fondo (contexto)
+        // Estética: Cursiva para las líneas de fondo
         if distance >= 0.25 {
             line_style = line_style.add_modifier(Modifier::ITALIC);
         }
 
-        // Línea más cercana al centro visual: negrita + Glow Sweep
+        // ── EFECTO 3: REFLEJO CINEMATOGRÁFICO ──
+        // Si es una línea posterior (abajo), la desvanecemos mucho más para simular reflejo
+        if i > current {
+            let reflection_fade = (i - current) as f64 * 0.3;
+            line_style = line_style.fg(lerp_color(line_style.fg.unwrap_or(state.theme.dim1), state.theme.bg, reflection_fade.min(0.8)));
+        }
+
+        // Línea más cercana al centro visual: Negrita + Gradiente Horizontal + Glow Sweep
         if distance < 0.25 {
             let mut spans = Vec::with_capacity(lyric.text.chars().count());
             let len = lyric.text.chars().count() as f64;
             
-            // El centro del brillo viaja de izquierda a derecha continuamente
+            // ── EFECTO 5: GRADIENTE HORIZONTAL + GLOW ──
             let sweep_center = (state.animation_time * 12.0).rem_euclid(len + 30.0) - 15.0;
             
             for (char_idx, c) in lyric.text.chars().enumerate() {
-                let char_dist = (char_idx as f64 - sweep_center).abs();
-                let glow_intensity = (1.0 - char_dist / 5.0).clamp(0.0, 1.0);
+                let char_pos = char_idx as f64;
                 
-                let char_color = if glow_intensity > 0.0 {
-                    lerp_color(state.theme.bright, Color::Rgb(255, 255, 255), glow_intensity)
+                // 1. Gradiente base (más oscuro en los extremos de la frase)
+                let edge_dist = (char_pos - len / 2.0).abs() / (len / 2.0);
+                let base_gradient = lerp_color(state.theme.bright, state.theme.dim2, edge_dist * 0.4);
+                
+                // 2. Brillo animado (Glow Sweep)
+                let char_dist = (char_pos - sweep_center).abs();
+                let glow_intensity = (1.0 - char_dist / 6.0).clamp(0.0, 1.0);
+                
+                let final_color = if glow_intensity > 0.0 {
+                    lerp_color(base_gradient, Color::Rgb(255, 255, 255), glow_intensity)
                 } else {
-                    state.theme.bright
+                    base_gradient
                 };
                 
-                spans.push(Span::styled(c.to_string(), Style::default().fg(char_color).add_modifier(Modifier::BOLD)));
+                spans.push(Span::styled(c.to_string(), Style::default().fg(final_color).add_modifier(Modifier::BOLD)));
             }
             
             lines.push(Line::from(spans));
             
         } else {
-            // Líneas de contexto: Desvanecimiento puro estilo Apple Music
+            // Líneas de contexto (con el posible efecto de reflejo aplicado arriba)
             lines.push(Line::from(Span::styled(lyric.text.clone(), line_style)));
         }
 
         // En Modo Foco usamos siempre doble espaciado para llenar la pantalla con elegancia
-        lines.push(Line::from("")); 
+        // Pero si es instrumental, no añadimos el espacio arriba para que quede bien centrado
+        if !(state.is_instrumental && i == current) {
+            lines.push(Line::from("")); 
+        }
         
-        // Insertar animación de instrumental en el hueco
+        // ── EFECTO: PUNTOS PULSANTES (Instrumental Minimalista) ──
         if state.is_instrumental && i == current {
-            let wave_chars = ['〰', '🎵', '〰', '〰', '🎶', '〰'];
-            let offset = (state.animation_time * 3.0) as usize;
-            let mut wave_str = String::new();
-            for j in 0..15 {
-                wave_str.push(wave_chars[(j + offset) % wave_chars.len()]);
-                wave_str.push(' ');
+            let mut spans = Vec::new();
+            let num_dots = 12;
+            
+            for x in 0..num_dots {
+                // Reducimos la velocidad (de 4.0 a 2.0) para un pulso más relajado
+                let phase = state.animation_time * 2.0 - (x as f64 * 0.5);
+                let intensity = ((phase.sin() + 1.0) / 2.0).powf(2.0);
+                
+                // Color que transita de dim a bright según el pulso
+                let color = lerp_color(state.theme.dim3, state.theme.bright, intensity);
+                
+                // El punto central del pulso brilla en blanco
+                let final_color = if intensity > 0.9 {
+                    Color::Rgb(255, 255, 255)
+                } else {
+                    color
+                };
+
+                spans.push(Span::styled(" ● ", Style::default().fg(final_color)));
             }
             
-            let instr_dist = (i as f64 + 0.5 - state.visual_offset).abs();
-            let instr_style = dim_style(instr_dist, &state.theme);
-            let final_style = if instr_dist < 0.25 {
-                instr_style.add_modifier(Modifier::BOLD)
-            } else {
-                instr_style
-            };
-            lines.push(Line::from(Span::styled(wave_str, final_style)));
-            lines.push(Line::from("")); // Doble espaciado
+            lines.push(Line::from(spans).alignment(Alignment::Center));
+            lines.push(Line::from("")); 
         }
     }
 
