@@ -38,7 +38,7 @@ The system is built on a multi-actor model using `mpsc` channels to ensure the r
 
 ## Installation
 
-### 🚀 Quick Install (Recommended for most users)
+### Quick Install (Recommended for most users)
 
 For most Linux users (Ubuntu, Fedora, Arch, etc.), the easiest way is to use the statically precompiled binary (featherweight, no system dependencies required). 
 
@@ -55,7 +55,7 @@ chmod +x sptlrx-rs
 sudo mv sptlrx-rs /usr/local/bin/
 ```
 
-### 🛠️ Advanced Installation & Development (Nix / Rust)
+### Advanced Installation & Development (Nix / Rust)
 
 This project guarantees deterministic reproducibility using **Nix Flakes**. If you are a developer or a NixOS user, you don't need to install global C or Rust dependencies on your system.
 
