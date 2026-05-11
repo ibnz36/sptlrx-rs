@@ -6,6 +6,7 @@ mod raw;
 mod theme;
 mod ticker;
 mod ui;
+mod color_extractor;
 
 use tokio::sync::mpsc;
 
@@ -19,6 +20,7 @@ pub struct TrackInfo {
     pub title: String,
     pub artist: String,
     pub duration_ms: u64,
+    pub art_url: Option<String>,
 }
 
 /// Eventos que fluyen por el canal mpsc desde los actores hacia la UI.
@@ -28,6 +30,8 @@ pub enum AppEvent {
     Position(i64),
     /// La canción cambió; incluye título, artista y duración.
     TrackChanged(TrackInfo),
+    /// Color dominante de la portada
+    DominantColor(ratatui::style::Color),
     /// Letras parseadas listas para mostrar.
     Lyrics(Vec<LrcLine>),
     /// Estado de reproducción: true = reproduciendo, false = en pausa.

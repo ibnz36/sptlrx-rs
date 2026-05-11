@@ -26,6 +26,8 @@ use crate::{
 
 struct AppState {
     theme: Theme,
+    base_bright: Color,
+    target_bright: Option<Color>,
     lyrics: Vec<LrcLine>,
     track_title: String,
     track_artist: String,
@@ -46,6 +48,8 @@ struct AppState {
 impl AppState {
     fn new(theme: Theme) -> Self {
         Self {
+            base_bright: theme.bright,
+            target_bright: None,
             theme,
             lyrics: Vec::new(),
             track_title: String::from("Waiting for Spotify..."),
@@ -102,7 +106,7 @@ impl AppState {
                 let pos = self.interpolated_pos_ms();
                 self.current_line = find_current_line(&self.lyrics, pos);
             }
-            AppEvent::TrackChanged(TrackInfo { title, artist, duration_ms }) => {
+            AppEvent::TrackChanged(TrackInfo { title, artist, duration_ms, .. }) => {
                 self.track_title = title;
                 self.track_artist = artist;
                 self.duration_ms = duration_ms;
@@ -111,7 +115,11 @@ impl AppState {
                 self.current_line = None;
                 self.last_known_pos_ms = 0;
                 self.last_sync_time = Instant::now();
+                self.target_bright = None;
                 // NO resetear initial_sync_done: Seeked llegará con la posición correcta
+            }
+            AppEvent::DominantColor(color) => {
+                self.target_bright = Some(color);
             }
             AppEvent::Lyrics(lines) => {
                 self.lyrics_loading = false;
@@ -159,7 +167,7 @@ fn dim_style(distance: f64, theme: &Theme) -> Style {
 // ── Renderizado ───────────────────────────────────────────────────────────────
 
 fn render(frame: &mut Frame, state: &AppState) {
-    let area = frame.size();
+    let mut area = frame.size();
 
     // Fondo general
     frame.render_widget(
@@ -167,8 +175,21 @@ fn render(frame: &mut Frame, state: &AppState) {
         area,
     );
 
-    // Letras en pantalla completa
+    let progress_area = Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(1),
+        width: area.width,
+        height: 1,
+    };
+    
+    // Reducir área vertical para dejar espacio a la barra de progreso
+    area.height = area.height.saturating_sub(1);
+
+    // Letras en pantalla
     render_lyrics(frame, state, area);
+    
+    // Barra de progreso
+    render_progress_bar(frame, state, progress_area);
 }
 
 
@@ -229,6 +250,38 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
     frame.render_widget(lyrics_widget, area);
 }
 
+fn render_progress_bar(frame: &mut Frame, state: &AppState, area: Rect) {
+    if state.duration_ms == 0 {
+        return;
+    }
+
+    let progress = (state.interpolated_pos_ms() as f64 / state.duration_ms as f64).clamp(0.0, 1.0);
+    
+    let width = area.width as usize;
+    if width == 0 { return; }
+
+    let filled_width = (width as f64 * progress).round() as usize;
+    let mut line_spans = Vec::new();
+    
+    // Braille progress
+    if filled_width > 0 {
+        line_spans.push(Span::styled(
+            "⣿".repeat(filled_width),
+            Style::default().fg(state.theme.bright)
+        ));
+    }
+    
+    let empty_width = width.saturating_sub(filled_width);
+    if empty_width > 0 {
+        line_spans.push(Span::styled(
+            "⣀".repeat(empty_width),
+            Style::default().fg(state.theme.dim3)
+        ));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(line_spans)), area);
+}
+
 
 // ── Setup / teardown del terminal ─────────────────────────────────────────────
 
@@ -283,6 +336,13 @@ pub async fn run(mut rx: Receiver<AppEvent>, theme: Theme) -> anyhow::Result<()>
         // Interpolación visual a 60fps
         let target_offset = state.current_line.unwrap_or(0) as f64;
         state.visual_offset += (target_offset - state.visual_offset) * 0.15;
+
+        // Interpolación de color camaleón a 60fps
+        if let Some(target) = state.target_bright {
+            state.theme.bright = lerp_color(state.theme.bright, target, 0.05);
+        } else {
+            state.theme.bright = lerp_color(state.theme.bright, state.base_bright, 0.05);
+        }
 
         tokio::time::sleep(frame_duration).await;
     }

@@ -27,3 +27,5 @@ anyhow = "1.0"
 # Para parsear la configuración del tema y rutas (Fase 3: Rice)
 toml = "0.8"
 dirs = "6.0"
+image = "0.25.10"
+urlencoding = "2.1.3"

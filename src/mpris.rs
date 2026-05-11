@@ -129,10 +129,20 @@ pub async fn run(tx: Sender<AppEvent>, fetch_tx: Sender<TrackInfo>) {
                             let duration_ms = get_i64(&meta, "mpris:length")
                                 .map(|us| (us / 1000) as u64)
                                 .unwrap_or(0);
+                            let art_url = get_str(&meta, "mpris:artUrl");
 
-                            let info = TrackInfo { title, artist, duration_ms };
+                            let info = TrackInfo { title, artist, duration_ms, art_url: art_url.clone() };
                             let _ = tx.send(AppEvent::TrackChanged(info.clone())).await;
                             let _ = fetch_tx.send(info).await;
+                            
+                            if let Some(url) = art_url {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    if let Some(color) = crate::color_extractor::get_dominant_color(&url).await {
+                                        let _ = tx_clone.send(AppEvent::DominantColor(color)).await;
+                                    }
+                                });
+                            }
                         }
                     }
                 }

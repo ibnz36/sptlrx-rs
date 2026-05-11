@@ -85,6 +85,7 @@ impl RawState {
                 self.current_line = None;
                 changed = true;
             }
+            AppEvent::DominantColor(_) => {}
             AppEvent::Quit => {}
         }
         changed
