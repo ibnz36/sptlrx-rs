@@ -30,8 +30,8 @@ pub enum AppEvent {
     Position(i64),
     /// La canción cambió; incluye título, artista y duración.
     TrackChanged(TrackInfo),
-    /// Color dominante de la portada
-    DominantColor(ratatui::style::Color),
+    /// Color dominante y portada reducida de Spotify
+    ArtProcessed(ratatui::style::Color, image::RgbImage),
     /// Letras parseadas listas para mostrar.
     Lyrics(Vec<LrcLine>),
     /// Estado de reproducción: true = reproduciendo, false = en pausa.

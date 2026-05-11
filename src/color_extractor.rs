@@ -1,7 +1,7 @@
 use ratatui::style::Color;
 use std::collections::HashMap;
 
-pub async fn get_dominant_color(url: &str) -> Option<Color> {
+pub async fn get_dominant_color(url: &str) -> Option<(Color, image::RgbImage)> {
     let bytes = if url.starts_with("http") {
         reqwest::get(url).await.ok()?.bytes().await.ok()?
     } else if url.starts_with("file://") {
@@ -67,5 +67,5 @@ pub async fn get_dominant_color(url: &str) -> Option<Color> {
     g = g.saturating_add(8);
     b = b.saturating_add(8);
 
-    Some(Color::Rgb(r, g, b))
+    Some((Color::Rgb(r, g, b), img))
 }

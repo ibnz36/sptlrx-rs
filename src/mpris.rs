@@ -138,8 +138,8 @@ pub async fn run(tx: Sender<AppEvent>, fetch_tx: Sender<TrackInfo>) {
                             if let Some(url) = art_url {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
-                                    if let Some(color) = crate::color_extractor::get_dominant_color(&url).await {
-                                        let _ = tx_clone.send(AppEvent::DominantColor(color)).await;
+                                    if let Some((color, img)) = crate::color_extractor::get_dominant_color(&url).await {
+                                        let _ = tx_clone.send(AppEvent::ArtProcessed(color, img)).await;
                                     }
                                 });
                             }

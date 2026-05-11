@@ -28,6 +28,7 @@ struct AppState {
     theme: Theme,
     base_bright: Color,
     target_bright: Option<Color>,
+    album_art: Option<image::RgbImage>,
     lyrics: Vec<LrcLine>,
     track_title: String,
     track_artist: String,
@@ -45,6 +46,8 @@ struct AppState {
     visual_offset: f64,
     /// Tiempo de animación para efectos continuos
     animation_time: f64,
+    /// Detector de tramo instrumental
+    is_instrumental: bool,
 }
 
 impl AppState {
@@ -52,6 +55,7 @@ impl AppState {
         Self {
             base_bright: theme.bright,
             target_bright: None,
+            album_art: None,
             theme,
             lyrics: Vec::new(),
             track_title: String::from("Waiting for Spotify..."),
@@ -65,6 +69,7 @@ impl AppState {
             initial_sync_done: false,
             visual_offset: 0.0,
             animation_time: 0.0,
+            is_instrumental: false,
         }
     }
 
@@ -119,10 +124,12 @@ impl AppState {
                 self.last_known_pos_ms = 0;
                 self.last_sync_time = Instant::now();
                 self.target_bright = None;
+                self.album_art = None;
                 // NO resetear initial_sync_done: Seeked llegará con la posición correcta
             }
-            AppEvent::DominantColor(color) => {
+            AppEvent::ArtProcessed(color, img) => {
                 self.target_bright = Some(color);
+                self.album_art = Some(img);
             }
             AppEvent::Lyrics(lines) => {
                 self.lyrics_loading = false;
@@ -161,8 +168,11 @@ fn dim_style(distance: f64, theme: &Theme) -> Style {
         lerp_color(theme.dim1, theme.dim2, distance - 1.0)
     } else if distance < 3.0 {
         lerp_color(theme.dim2, theme.dim3, distance - 2.0)
+    } else if distance < 5.0 {
+        // Suave desvanecimiento hacia el color de fondo absoluto
+        lerp_color(theme.dim3, theme.bg, (distance - 3.0) / 2.0)
     } else {
-        theme.dim3
+        theme.bg
     };
     Style::default().fg(color)
 }
@@ -188,8 +198,24 @@ fn render(frame: &mut Frame, state: &AppState) {
     // Reducir área vertical para dejar espacio a la barra de progreso
     area.height = area.height.saturating_sub(1);
 
-    // Letras en pantalla
-    render_lyrics(frame, state, area);
+    let mut lyrics_area = area;
+    let art_width = 30; // 24 block_width + 6 padding
+
+    // Si hay portada y espacio suficiente, desplazamos las letras a la derecha
+    if state.album_art.is_some() && area.width > art_width + 20 {
+        lyrics_area.x += art_width + 4; // Añadir margen izquierdo extra
+        lyrics_area.width = lyrics_area.width.saturating_sub(art_width + 4);
+    } else {
+        // Margen por defecto si está centrado
+        lyrics_area.x += 2;
+        lyrics_area.width = lyrics_area.width.saturating_sub(4);
+    }
+
+    // Letras en pantalla (reducida o completa)
+    render_lyrics(frame, state, lyrics_area);
+    
+    // Portada en la esquina superior izquierda
+    render_album_art(frame, state, area);
     
     // Barra de progreso
     render_progress_bar(frame, state, progress_area);
@@ -215,10 +241,14 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
     // Usar todo el espacio vertical disponible (mitad para arriba, mitad para abajo)
     let context = (area.height as usize).saturating_div(2).saturating_sub(1);
 
-    let start = current.saturating_sub(context);
-    let end = (current + context + 1).min(state.lyrics.len());
+    let start = current.saturating_sub(context / 2);
+    let end = (current + context / 2 + 1).min(state.lyrics.len());
 
-    let visible_lines = end - start;
+    let mut visible_lines = (end - start) * 2;
+    if state.is_instrumental && current >= start && current < end {
+        visible_lines += 2;
+    }
+    
     let available_height = area.height as usize;
     let top_padding = available_height.saturating_sub(visible_lines) / 2;
 
@@ -233,10 +263,10 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
         let lyric = &state.lyrics[i];
         let distance = (i as f64 - state.visual_offset).abs();
 
-        let mut line_style = dim_style(distance, &state.theme);
+        let line_style = dim_style(distance, &state.theme);
         
         // Línea más cercana al centro visual: negrita + Glow Sweep
-        if distance < 0.5 {
+        if distance < 0.25 {
             let mut spans = Vec::with_capacity(lyric.text.chars().count());
             let len = lyric.text.chars().count() as f64;
             
@@ -258,36 +288,89 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
             }
             
             lines.push(Line::from(spans));
+            lines.push(Line::from("")); // Doble espaciado
             
         } else {
-            // Líneas de contexto: Bokeh Blur (desenfoque por profundidad)
-            let mut spans = Vec::with_capacity(lyric.text.chars().count());
-            
-            // A mayor distancia, mayor probabilidad de que un caracter se desenfoque (se vuelva '·')
-            let blur_prob = ((distance - 1.2) * 0.4).clamp(0.0, 0.95);
-            
-            for (char_idx, c) in lyric.text.chars().enumerate() {
-                // Generador pseudo-aleatorio determinista por coordenada (i, char_idx)
-                let seed = i.wrapping_mul(73856093).wrapping_add(char_idx.wrapping_mul(19349663));
-                let pseudo_rand = (seed % 1000) as f64 / 1000.0;
-                
-                if c != ' ' && pseudo_rand < blur_prob {
-                    spans.push(Span::styled("·", line_style));
-                } else {
-                    spans.push(Span::styled(c.to_string(), line_style));
-                }
+            // Líneas de contexto: Desvanecimiento puro estilo Apple Music (sin glitch)
+            lines.push(Line::from(Span::styled(lyric.text.clone(), line_style)));
+            lines.push(Line::from("")); // Doble espaciado
+        }
+        
+        // Insertar animación de instrumental en el hueco
+        if state.is_instrumental && i == current {
+            let wave_chars = ['〰', '🎵', '〰', '〰', '🎶', '〰'];
+            let offset = (state.animation_time * 3.0) as usize;
+            let mut wave_str = String::new();
+            for j in 0..15 {
+                wave_str.push(wave_chars[(j + offset) % wave_chars.len()]);
+                wave_str.push(' ');
             }
             
-            lines.push(Line::from(spans));
+            let instr_dist = (i as f64 + 0.5 - state.visual_offset).abs();
+            let instr_style = dim_style(instr_dist, &state.theme);
+            let final_style = if instr_dist < 0.25 {
+                instr_style.add_modifier(Modifier::BOLD)
+            } else {
+                instr_style
+            };
+            lines.push(Line::from(Span::styled(wave_str, final_style)));
+            lines.push(Line::from("")); // Doble espaciado
         }
     }
 
+    let alignment = if state.album_art.is_some() && area.width > 50 {
+        Alignment::Left
+    } else {
+        Alignment::Center
+    };
+
     let lyrics_widget = Paragraph::new(Text::from(lines))
-        .alignment(Alignment::Center)
+        .alignment(alignment)
         .style(Style::default().bg(state.theme.bg))
         .wrap(Wrap { trim: false });
 
     frame.render_widget(lyrics_widget, area);
+}
+
+fn render_album_art(frame: &mut Frame, state: &AppState, area: Rect) {
+    if let Some(img) = &state.album_art {
+        let block_width = 24; // 24 columnas
+        let block_height = 12; // 12 filas (24 pixeles de alto)
+        
+        // Si no hay suficiente espacio para la portada, no la dibujamos
+        if area.width < block_width + 6 || area.height < block_height + 4 {
+            return;
+        }
+
+        let art_area = Rect {
+            x: area.x + 3,
+            y: area.y + 2,
+            width: block_width,
+            height: block_height,
+        };
+
+        // Redimensionar para encajar en los caracteres (FilterType::Triangle para velocidad/calidad)
+        let scaled = image::imageops::resize(img, block_width as u32, (block_height * 2) as u32, image::imageops::FilterType::Triangle);
+        
+        let mut lines = Vec::new();
+        for y in (0..scaled.height()).step_by(2) {
+            let mut spans = Vec::new();
+            for x in 0..scaled.width() {
+                let top = scaled.get_pixel(x, y);
+                let bottom = if y + 1 < scaled.height() { scaled.get_pixel(x, y + 1) } else { top };
+                
+                spans.push(Span::styled(
+                    "▀",
+                    Style::default()
+                        .fg(Color::Rgb(top[0], top[1], top[2]))
+                        .bg(Color::Rgb(bottom[0], bottom[1], bottom[2]))
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
+
+        frame.render_widget(Paragraph::new(lines), art_area);
+    }
 }
 
 fn render_progress_bar(frame: &mut Frame, state: &AppState, area: Rect) {
@@ -373,8 +456,22 @@ pub async fn run(mut rx: Receiver<AppEvent>, theme: Theme) -> anyhow::Result<()>
             }
         }
 
+        // Detección de tramo instrumental
+        let mut target_offset = state.current_line.unwrap_or(0) as f64;
+        let pos = state.interpolated_pos_ms();
+        state.is_instrumental = false;
+        
+        if let Some(curr) = state.current_line {
+            if let (Some(curr_lyric), Some(next_lyric)) = (state.lyrics.get(curr), state.lyrics.get(curr + 1)) {
+                // Si pasaron 5s y faltan >10s
+                if pos > curr_lyric.timestamp_ms + 5000 && next_lyric.timestamp_ms > pos + 10000 {
+                    state.is_instrumental = true;
+                    target_offset += 0.5; // Apuntar visualmente al medio
+                }
+            }
+        }
+
         // Interpolación visual a 60fps
-        let target_offset = state.current_line.unwrap_or(0) as f64;
         state.visual_offset += (target_offset - state.visual_offset) * 0.15;
         state.animation_time += 0.05;
 
