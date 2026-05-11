@@ -1,4 +1,6 @@
 # sptlrx-rs
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/00b45d61-9871-4d93-9fbc-1f08816db7e6" />
+
 
 A high-performance, low-latency Spotify synchronized lyrics client for Linux terminal environments.
 
