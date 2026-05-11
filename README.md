@@ -1,6 +1,6 @@
 # sptlrx-rs
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/00b45d61-9871-4d93-9fbc-1f08816db7e6" />
 
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/00b45d61-9871-4d93-9fbc-1f08816db7e6" />
 
 A high-performance, low-latency Spotify synchronized lyrics client for Linux terminal environments.
 
@@ -9,8 +9,16 @@ Built in Rust, `sptlrx-rs` leverages the MPRIS D-Bus interface and `tokio` async
 <img width="1091" height="642" alt="image" src="https://github.com/user-attachments/assets/ffb69c9f-6d1f-44dd-8f3f-cdeb4aba5afe" />
 
 <p align="center">
-  <img width="965" src="https://github.com/user-attachments/assets/4d2f0ba8-8ad4-4808-b4ba-687c93f9dd74" alt="Descripción descriptiva del cliente de líricas" />
+  <img width="965" src="https://github.com/user-attachments/assets/4d2f0ba8-8ad4-4808-b4ba-687c93f9dd74" alt="sptlrx-rs showcase" />
 </p>
+
+## Features
+
+- **Zero API Latency:** Reads playback status directly from your OS via D-Bus/MPRIS. No Spotify developer tokens required.
+- **Dynamic Theming:** Automatically extracts the dominant color from the current Spotify album art to style the TUI in real-time.
+- **Smooth Interpolation:** Calculates track position internally at 60fps for buttery smooth lyric scrolling without spamming D-Bus.
+- **Rice-Ready (Raw Mode):** Outputs current lyric lines directly to `stdout`. Perfect for feeding into Waybar, Polybar, Eww, or AGS.
+- **Featherweight:** Compiled static binary written in pure Rust (TLS via `rustls`). Negligible CPU and RAM footprint.
 
 ## Architecture
 
@@ -25,13 +33,56 @@ The system is built on a multi-actor model using `mpsc` channels to ensure the r
 
 - Rust toolchain (edition 2024 / rustc 1.91+)
 - D-Bus (user session)
-- OpenSSL / rustls
 
-## Build & Run
+*(Note: `sptlrx-rs` uses `rustls` for cryptography, meaning it does not require C-based OpenSSL libraries to compile).*
 
+## Installation
+
+### Nix / NixOS (Recommended)
+If you are using Nix with flakes enabled, you can run it directly without installing anything:
 ```bash
+nix run github:tu-usuario/sptlrx-rs
+```
+Or build the static MUSL binary:
+```bash
+nix build github:tu-usuario/sptlrx-rs#static
+```
+
+### Cargo (Other Linux Distros)
+```bash
+git clone [https://github.com/tu-usuario/sptlrx-rs](https://github.com/tu-usuario/sptlrx-rs)
+cd sptlrx-rs
 cargo build --release
 ./target/release/sptlrx-rs
+```
+
+## Configuration & Theming
+
+`sptlrx-rs` supports custom themes and solid backgrounds. By default, it looks for a configuration file at `~/.config/sptlrx-rs/config.toml`.
+
+Example `config.toml`:
+```toml
+# Built-in themes: "catppuccin-mocha" (default), or "custom"
+theme = "custom"
+# Optional: Force a solid background instead of transparency
+# background = "#0d1117"
+
+[custom]
+accent = "#58a6ff"
+text = "#c9d1d9"
+dim1 = "#8b949e"
+dim2 = "#484f58"
+dim3 = "#21262d"
+bar = "#1f6feb"
+```
+> **Note:** If the TUI successfully fetches album art from Spotify, it will dynamically extract the dominant color and override the `accent` and `bar` colors automatically!
+
+## Status Bar Integration (Raw Mode)
+
+If you want to pipe the currently sung lyric line directly into your status bar, use the `--raw` flag. This bypasses the graphical interface completely and prints plain text to `stdout` as the song progresses.
+
+```bash
+sptlrx-rs --raw
 ```
 
 ## Window Manager Integration (Hyprland / Wayland)
@@ -40,7 +91,7 @@ The UI expects a transparent terminal background. To use it as a desktop widget,
 
 Example `kitty` invocation:
 ```bash
-kitty -o font_size=42 -o font_family="JetBrainsMono Nerd Font" --class sptlrx-widget -e ./target/release/sptlrx-rs
+kitty -o font_size=42 -o font_family="JetBrainsMono Nerd Font" --class sptlrx-widget -e sptlrx-rs
 ```
 
 Example `hyprland.conf` rules:
