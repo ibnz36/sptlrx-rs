@@ -286,23 +286,22 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
     }
 
     let current = state.current_line.unwrap_or(0);
-    // Usar todo el espacio vertical disponible (mitad para arriba, mitad para abajo)
-    let context = (area.height as usize).saturating_div(2).saturating_sub(1);
-
-    let start = current.saturating_sub(context / 2);
-    let end = (current + context / 2 + 1).min(state.lyrics.len());
-
-    let mut visible_lines = (end - start) * 2;
-    if state.is_instrumental && current >= start && current < end {
-        visible_lines += 2;
-    }
     
+    // MODO FOCO: 2 arriba, 1 actual, 2 abajo
+    let context_above = 2;
+    let context_below = 2;
+    
+    let start = current.saturating_sub(context_above);
+    let end = (current + context_below + 1).min(state.lyrics.len());
+
+    // Calculamos la altura necesaria para 5 líneas con doble espaciado
+    let total_lines_to_render = (end - start) * 2;
     let available_height = area.height as usize;
-    let top_padding = available_height.saturating_sub(visible_lines) / 2;
+    let top_padding = available_height.saturating_sub(total_lines_to_render) / 2;
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Padding superior para centrar verticalmente
+    // Padding superior para centrar el bloque de 5 líneas
     for _ in 0..top_padding {
         lines.push(Line::from(""));
     }
@@ -311,23 +310,26 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
         let lyric = &state.lyrics[i];
         let distance = (i as f64 - state.visual_offset).abs();
 
-        let line_style = dim_style(distance, &state.theme);
+        let mut line_style = dim_style(distance, &state.theme);
         
+        // Estética: Cursiva para las líneas de fondo (contexto)
+        if distance >= 0.25 {
+            line_style = line_style.add_modifier(Modifier::ITALIC);
+        }
+
         // Línea más cercana al centro visual: negrita + Glow Sweep
         if distance < 0.25 {
             let mut spans = Vec::with_capacity(lyric.text.chars().count());
             let len = lyric.text.chars().count() as f64;
             
-            // El centro del brillo viaja de izquierda a derecha continuamente (un poco más rápido)
-            let sweep_center = (state.animation_time * 10.0).rem_euclid(len + 30.0) - 10.0;
+            // El centro del brillo viaja de izquierda a derecha continuamente
+            let sweep_center = (state.animation_time * 12.0).rem_euclid(len + 30.0) - 15.0;
             
             for (char_idx, c) in lyric.text.chars().enumerate() {
                 let char_dist = (char_idx as f64 - sweep_center).abs();
-                // Radio de brillo un poco más amplio (5.0 en vez de 4.0)
                 let glow_intensity = (1.0 - char_dist / 5.0).clamp(0.0, 1.0);
                 
                 let char_color = if glow_intensity > 0.0 {
-                    // Pico de brillo al 100% blanco para que "reluzca" de verdad
                     lerp_color(state.theme.bright, Color::Rgb(255, 255, 255), glow_intensity)
                 } else {
                     state.theme.bright
@@ -337,13 +339,14 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
             }
             
             lines.push(Line::from(spans));
-            lines.push(Line::from("")); // Doble espaciado
             
         } else {
-            // Líneas de contexto: Desvanecimiento puro estilo Apple Music (sin glitch)
+            // Líneas de contexto: Desvanecimiento puro estilo Apple Music
             lines.push(Line::from(Span::styled(lyric.text.clone(), line_style)));
-            lines.push(Line::from("")); // Doble espaciado
         }
+
+        // En Modo Foco usamos siempre doble espaciado para llenar la pantalla con elegancia
+        lines.push(Line::from("")); 
         
         // Insertar animación de instrumental en el hueco
         if state.is_instrumental && i == current {
