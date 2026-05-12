@@ -1,3 +1,4 @@
+mod color_extractor;
 mod config;
 mod fetcher;
 mod lyrics;
@@ -6,7 +7,6 @@ mod raw;
 mod theme;
 mod ticker;
 mod ui;
-mod color_extractor;
 
 use tokio::sync::mpsc;
 
@@ -49,6 +49,24 @@ pub enum AppEvent {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let mut is_raw = false;
+    let mut player = "spotify".to_string();
+
+    let mut expect_player = false;
+    for arg in std::env::args() {
+        if expect_player {
+            player = arg.clone();
+        }
+
+        if arg == "--raw" {
+            is_raw = true;
+        }
+
+        if arg == "--player" {
+            expect_player = true;
+        }
+    }
+
     // Canal principal: actores → UI
     let (tx, rx) = mpsc::channel::<AppEvent>(128);
 
@@ -56,20 +74,13 @@ async fn main() -> anyhow::Result<()> {
     let (fetch_tx, fetch_rx) = mpsc::channel::<TrackInfo>(16);
 
     // Actor MPRIS: lee Position y Metadata de Spotify via DBus.
-    tokio::spawn(mpris::run(tx.clone(), fetch_tx));
+    tokio::spawn(mpris::run(tx.clone(), fetch_tx, player.clone()));
 
     // Actor Ticker: dispara AppEvent::Tick cada 50 ms.
     tokio::spawn(ticker::run(tx.clone()));
 
     // Actor Fetcher: descarga letras de LRCLIB al cambiar de canción.
     tokio::spawn(fetcher::run(fetch_rx, tx.clone()));
-
-    let mut is_raw = false;
-    for arg in std::env::args() {
-        if arg == "--raw" {
-            is_raw = true;
-        }
-    }
 
     if is_raw {
         raw::run(rx).await?;
@@ -79,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
         let theme = config.get_theme();
 
         // Loop de UI: bloquea el hilo principal hasta que el usuario salga.
-        ui::run(rx, theme).await?;
+        ui::run(rx, theme, player).await?;
     }
 
     Ok(())

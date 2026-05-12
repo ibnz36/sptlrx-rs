@@ -6,13 +6,12 @@ use futures_util::StreamExt;
 use tokio::sync::mpsc::Sender;
 use tokio::time;
 use zbus::zvariant::OwnedValue;
-use zbus::{dbus_proxy, Connection};
+use zbus::{Connection, dbus_proxy};
 
 use crate::{AppEvent, TrackInfo};
 
 #[dbus_proxy(
     interface = "org.mpris.MediaPlayer2.Player",
-    default_service = "org.mpris.MediaPlayer2.spotify",
     default_path = "/org/mpris/MediaPlayer2"
 )]
 trait Player {
@@ -33,51 +32,57 @@ trait Player {
     // ── Métodos de control interactivo ──
     #[dbus_proxy(name = "PlayPause")]
     fn play_pause_track(&self) -> zbus::Result<()>;
-    
+
     #[dbus_proxy(name = "Next")]
     fn next_track(&self) -> zbus::Result<()>;
-    
+
     #[dbus_proxy(name = "Previous")]
     fn previous_track(&self) -> zbus::Result<()>;
-    
+
     #[dbus_proxy(name = "Seek")]
     fn seek_track(&self, offset: i64) -> zbus::Result<()>;
 }
 
-pub async fn toggle_play_pause() {
-    tokio::spawn(async {
+pub async fn toggle_play_pause(player: &str) {
+    let p = player.to_string();
+    tokio::spawn(async move {
         if let Ok(conn) = Connection::session().await {
-            if let Ok(player) = PlayerProxy::new(&conn).await {
+            if let Ok(player) = build_player(&conn, &p).await {
                 let _ = player.play_pause_track().await;
             }
         }
     });
 }
 
-pub async fn next_track() {
-    tokio::spawn(async {
+pub async fn next_track(player: &str) {
+    let p = player.to_string();
+    tokio::spawn(async move {
         if let Ok(conn) = Connection::session().await {
-            if let Ok(player) = PlayerProxy::new(&conn).await {
+            if let Ok(player) = build_player(&conn, &p).await {
                 let _ = player.next_track().await;
             }
         }
     });
 }
 
-pub async fn previous_track() {
-    tokio::spawn(async {
-        if let Ok(conn) = Connection::session().await {
-            if let Ok(player) = PlayerProxy::new(&conn).await {
-                let _ = player.previous_track().await;
+pub async fn previous_track(player: &str) {
+    let p = player.to_string();
+    tokio::spawn(async move {
+        let conn = Connection::session().await.unwrap();
+        {
+            let player = build_player(&conn, &p).await.unwrap();
+            {
+                player.previous_track().await.unwrap();
             }
         }
     });
 }
 
-pub async fn seek_relative(offset_us: i64) {
+pub async fn seek_relative(offset_us: i64, player: &str) {
+    let p = player.to_string();
     tokio::spawn(async move {
         if let Ok(conn) = Connection::session().await {
-            if let Ok(player) = PlayerProxy::new(&conn).await {
+            if let Ok(player) = build_player(&conn, &p).await {
                 let _ = player.seek_track(offset_us).await;
             }
         }
@@ -105,7 +110,11 @@ fn get_str_array(metadata: &HashMap<String, OwnedValue>, key: &str) -> Option<St
                     _ => None,
                 })
                 .collect();
-            if parts.is_empty() { None } else { Some(parts.join(", ")) }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join(", "))
+            }
         }
         _ => None,
     }
@@ -129,12 +138,20 @@ fn get_track_id(metadata: &HashMap<String, OwnedValue>) -> Option<String> {
     }
 }
 
+async fn build_player<'a>(
+    conn: &'a Connection,
+    player: &'a str,
+) -> Result<PlayerProxy<'a>, zbus::Error> {
+    let dest = format!("org.mpris.MediaPlayer2.{player}");
+    PlayerProxy::builder(conn).destination(dest)?.build().await
+}
+
 // ── Actor principal ───────────────────────────────────────────────────────────
 
 /// Bucle asíncrono que:
 /// 1. Pollea Metadata → PlaybackStatus → Position cada 100ms.
 /// 2. Escucha la señal DBus `Seeked` para detectar seeks al instante.
-pub async fn run(tx: Sender<AppEvent>, fetch_tx: Sender<TrackInfo>) {
+pub async fn run(tx: Sender<AppEvent>, fetch_tx: Sender<TrackInfo>, destination: String) {
     loop {
         let connection = match Connection::session().await {
             Ok(c) => c,
@@ -145,16 +162,18 @@ pub async fn run(tx: Sender<AppEvent>, fetch_tx: Sender<TrackInfo>) {
             }
         };
 
-        let player = match PlayerProxy::new(&connection).await {
+        let player = match build_player(&connection, &destination).await {
             Ok(p) => p,
             Err(_) => {
                 // Spotify no está abierto, enviamos evento de "Esperando"
-                let _ = tx.send(AppEvent::TrackChanged(TrackInfo {
-                    title: "Waiting for Spotify...".to_string(),
-                    artist: String::new(),
-                    duration_ms: 0,
-                    art_url: None,
-                })).await;
+                let _ = tx
+                    .send(AppEvent::TrackChanged(TrackInfo {
+                        title: format!("Waiting for player ({})...", destination),
+                        artist: String::new(),
+                        duration_ms: 0,
+                        art_url: None,
+                    }))
+                    .await;
                 time::sleep(Duration::from_secs(2)).await;
                 continue;
             }
@@ -178,7 +197,7 @@ pub async fn run(tx: Sender<AppEvent>, fetch_tx: Sender<TrackInfo>) {
                 // ── Rama 1: Polling periódico (100ms) ─────────────────────────
                 _ = interval.tick() => {
                     let mut track_just_changed = false;
-                    
+
                     // Intentamos obtener metadata
                     match player.metadata().await {
                         Ok(meta) => {
@@ -200,7 +219,7 @@ pub async fn run(tx: Sender<AppEvent>, fetch_tx: Sender<TrackInfo>) {
                                     let info = TrackInfo { title, artist, duration_ms, art_url: art_url.clone() };
                                     let _ = tx.send(AppEvent::TrackChanged(info.clone())).await;
                                     let _ = fetch_tx.send(info).await;
-                                    
+
                                     if let Some(url) = art_url {
                                         let tx_clone = tx.clone();
                                         tokio::spawn(async move {
@@ -246,7 +265,7 @@ pub async fn run(tx: Sender<AppEvent>, fetch_tx: Sender<TrackInfo>) {
                 }
             }
         }
-        
+
         // Esperamos un poco antes de intentar reconectar después de un fallo
         time::sleep(Duration::from_secs(1)).await;
     }

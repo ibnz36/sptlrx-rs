@@ -4,22 +4,22 @@ use std::time::{Duration, Instant};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Paragraph, Wrap},
-    Frame, Terminal,
 };
 use tokio::sync::mpsc::Receiver;
 
 use crate::{
-    lyrics::{find_current_line, LrcLine},
-    theme::Theme,
     AppEvent, TrackInfo,
+    lyrics::{LrcLine, find_current_line},
+    theme::Theme,
 };
 
 // ── Estado de la aplicación ───────────────────────────────────────────────────
@@ -119,7 +119,12 @@ impl AppState {
                 let pos = self.interpolated_pos_ms();
                 self.current_line = find_current_line(&self.lyrics, pos);
             }
-            AppEvent::TrackChanged(TrackInfo { title, artist, duration_ms, .. }) => {
+            AppEvent::TrackChanged(TrackInfo {
+                title,
+                artist,
+                duration_ms,
+                ..
+            }) => {
                 self.track_title = title;
                 self.track_artist = artist;
                 self.duration_ms = duration_ms;
@@ -194,14 +199,14 @@ fn render(frame: &mut Frame, state: &AppState) {
     );
 
     let progress_area = Rect {
-        x: area.x,
-        y: area.y + area.height.saturating_sub(1),
-        width: area.width,
-        height: 1,
+        x: area.x.saturating_add(4),
+        y: area.y + area.height.saturating_sub(2),
+        width: area.width.saturating_sub(8),
+        height: 2,
     };
-    
+
     // Reducir área vertical para dejar espacio a la barra de progreso
-    area.height = area.height.saturating_sub(1);
+    area.height = area.height.saturating_sub(4);
 
     let mut lyrics_area = area;
 
@@ -209,67 +214,94 @@ fn render(frame: &mut Frame, state: &AppState) {
     // El ancho intenta ser 1/3 de la pantalla, pero se ajusta si el alto es escaso.
     let max_art_width = (area.width / 3).clamp(10, 30);
     let max_art_height = (area.height.saturating_sub(8) as u16).max(5); // Reservar espacio para info/botones
-    
+
     let art_width = max_art_width.min(max_art_height * 2);
     let art_height = art_width / 2;
 
     // Decidimos si hay espacio para el layout de "Reproductor Completo"
-    let show_full_ui = state.album_art.is_some() 
-        && area.width > art_width + 20 
-        && area.height > art_height + 6;
+    let show_full_ui =
+        state.album_art.is_some() && area.width > art_width + 20 && area.height > art_height + 6;
 
     if state.lyrics.is_empty() && !state.lyrics_loading && state.album_art.is_some() {
         // ── CASO: PORTADA CENTRADA (Sin letras encontradas) ──
         // Matemática responsiva para el centro:
-        let max_w = (area.width / 2).clamp(20, 50).min(area.width.saturating_sub(4));
-        let max_h = (area.height.saturating_sub(8) as u16).max(5); 
-        
+        let max_w = (area.width / 2)
+            .clamp(20, 50)
+            .min(area.width.saturating_sub(4));
+        let max_h = (area.height.saturating_sub(8) as u16).max(5);
+
         let centered_width = max_w.min(max_h * 2);
         let centered_height = centered_width / 2;
-        
+
         let x = (area.width.saturating_sub(centered_width)) / 2;
         let y = (area.height.saturating_sub(centered_height + 6)) / 2;
 
-        let art_rect = Rect { x, y, width: centered_width, height: centered_height };
-        let info_rect = Rect { x: 0, y: y + centered_height + 1, width: area.width, height: 7 };
+        let art_rect = Rect {
+            x,
+            y,
+            width: centered_width,
+            height: centered_height,
+        };
+        let info_rect = Rect {
+            x: 0,
+            y: y + centered_height + 1,
+            width: area.width,
+            height: 7,
+        };
 
         let safe_art = art_rect.intersection(area);
         let safe_info = info_rect.intersection(area);
 
-        if safe_art.height > 0 { render_album_art_rect(frame, state, safe_art); }
-        if safe_info.height > 0 { render_track_info_rect(frame, state, safe_info, Alignment::Center); }
-        
+        if safe_art.height > 0 {
+            render_album_art_rect(frame, state, safe_art);
+        }
+        if safe_info.height > 0 {
+            render_track_info_rect(frame, state, safe_info, Alignment::Center);
+        }
     } else if show_full_ui {
         // ── CASO: SIDE-BY-SIDE (Reproductor completo con letras) ──
         // Restaurar margen izquierdo pegado (al gusto del usuario)
         lyrics_area.x += art_width + 8;
         lyrics_area.width = lyrics_area.width.saturating_sub(art_width + 12);
 
-        let total_block_height = art_height + 7; 
+        let total_block_height = art_height + 7;
         // Bajamos un poco más el offset vertical (+2) para que no se sienta "tan arriba"
-        let y_offset = (area.y + (area.height.saturating_sub(total_block_height)) / 2).saturating_add(2);
+        let y_offset =
+            (area.y + (area.height.saturating_sub(total_block_height)) / 2).saturating_add(2);
 
-        let art_rect = Rect { x: area.x + 3, y: y_offset, width: art_width, height: art_height };
-        let info_rect = Rect { x: area.x + 3, y: y_offset + art_height + 1, width: art_width, height: 6 };
+        let art_rect = Rect {
+            x: area.x + 3,
+            y: y_offset,
+            width: art_width,
+            height: art_height,
+        };
+        let info_rect = Rect {
+            x: area.x + 3,
+            y: y_offset + art_height + 1,
+            width: art_width,
+            height: 6,
+        };
 
         let safe_art = art_rect.intersection(area);
         let safe_info = info_rect.intersection(area);
 
         render_lyrics(frame, state, lyrics_area);
-        if safe_art.height > 0 { render_album_art_rect(frame, state, safe_art); }
-        if safe_info.height > 0 { render_track_info_rect(frame, state, safe_info, Alignment::Center); }
+        if safe_art.height > 0 {
+            render_album_art_rect(frame, state, safe_art);
+        }
+        if safe_info.height > 0 {
+            render_track_info_rect(frame, state, safe_info, Alignment::Center);
+        }
     } else {
         // ── CASO: SOLO LETRAS (Minimalista) ──
         lyrics_area.x = lyrics_area.x.saturating_add(2);
         lyrics_area.width = lyrics_area.width.saturating_sub(4);
         render_lyrics(frame, state, lyrics_area);
     }
-    
+
     // Barra de progreso siempre visible
     render_progress_bar(frame, state, progress_area);
 }
-
-
 
 fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
     if state.lyrics.is_empty() {
@@ -286,11 +318,11 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
     }
 
     let current = state.current_line.unwrap_or(0);
-    
+
     // MODO FOCO: 2 arriba, 1 actual, 2 abajo
     let context_above = 2;
     let context_below = 2;
-    
+
     let start = current.saturating_sub(context_above);
     let end = (current + context_below + 1).min(state.lyrics.len());
 
@@ -311,7 +343,7 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
         let distance = (i as f64 - state.visual_offset).abs();
 
         let mut line_style = dim_style(distance, &state.theme);
-        
+
         // Estética: Cursiva para las líneas de fondo
         if distance >= 0.25 {
             line_style = line_style.add_modifier(Modifier::ITALIC);
@@ -321,39 +353,48 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
         // Si es una línea posterior (abajo), la desvanecemos mucho más para simular reflejo
         if i > current {
             let reflection_fade = (i - current) as f64 * 0.3;
-            line_style = line_style.fg(lerp_color(line_style.fg.unwrap_or(state.theme.dim1), state.theme.bg, reflection_fade.min(0.8)));
+            line_style = line_style.fg(lerp_color(
+                line_style.fg.unwrap_or(state.theme.dim1),
+                state.theme.bg,
+                reflection_fade.min(0.8),
+            ));
         }
 
         // Línea más cercana al centro visual: Negrita + Gradiente Horizontal + Glow Sweep
         if distance < 0.25 {
             let mut spans = Vec::with_capacity(lyric.text.chars().count());
             let len = lyric.text.chars().count() as f64;
-            
+
             // ── EFECTO 5: GRADIENTE HORIZONTAL + GLOW ──
             let sweep_center = (state.animation_time * 12.0).rem_euclid(len + 30.0) - 15.0;
-            
+
             for (char_idx, c) in lyric.text.chars().enumerate() {
                 let char_pos = char_idx as f64;
-                
+
                 // 1. Gradiente base (más oscuro en los extremos de la frase)
                 let edge_dist = (char_pos - len / 2.0).abs() / (len / 2.0);
-                let base_gradient = lerp_color(state.theme.bright, state.theme.dim2, edge_dist * 0.4);
-                
+                let base_gradient =
+                    lerp_color(state.theme.bright, state.theme.dim2, edge_dist * 0.4);
+
                 // 2. Brillo animado (Glow Sweep)
                 let char_dist = (char_pos - sweep_center).abs();
                 let glow_intensity = (1.0 - char_dist / 6.0).clamp(0.0, 1.0);
-                
+
                 let final_color = if glow_intensity > 0.0 {
                     lerp_color(base_gradient, Color::Rgb(255, 255, 255), glow_intensity)
                 } else {
                     base_gradient
                 };
-                
-                spans.push(Span::styled(c.to_string(), Style::default().fg(final_color).add_modifier(Modifier::BOLD)));
+
+                spans.push(Span::styled(
+                    c.to_string(),
+                    Style::default()
+                        .fg(final_color)
+                        .add_modifier(Modifier::BOLD),
+                ));
             }
-            
+
             lines.push(Line::from(spans));
-            
         } else {
             // Líneas de contexto (con el posible efecto de reflejo aplicado arriba)
             lines.push(Line::from(Span::styled(lyric.text.clone(), line_style)));
@@ -362,22 +403,22 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
         // En Modo Foco usamos siempre doble espaciado para llenar la pantalla con elegancia
         // Pero si es instrumental, no añadimos el espacio arriba para que quede bien centrado
         if !(state.is_instrumental && i == current) {
-            lines.push(Line::from("")); 
+            lines.push(Line::from(""));
         }
-        
+
         // ── EFECTO: PUNTOS PULSANTES (Instrumental Minimalista) ──
         if state.is_instrumental && i == current {
             let mut spans = Vec::new();
             let num_dots = 12;
-            
+
             for x in 0..num_dots {
                 // Reducimos la velocidad (de 4.0 a 2.0) para un pulso más relajado
                 let phase = state.animation_time * 2.0 - (x as f64 * 0.5);
                 let intensity = ((phase.sin() + 1.0) / 2.0).powf(2.0);
-                
+
                 // Color que transita de dim a bright según el pulso
                 let color = lerp_color(state.theme.dim3, state.theme.bright, intensity);
-                
+
                 // El punto central del pulso brilla en blanco
                 let final_color = if intensity > 0.9 {
                     Color::Rgb(255, 255, 255)
@@ -387,9 +428,9 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
 
                 spans.push(Span::styled(" ● ", Style::default().fg(final_color)));
             }
-            
+
             lines.push(Line::from(spans).alignment(Alignment::Center));
-            lines.push(Line::from("")); 
+            lines.push(Line::from(""));
         }
     }
 
@@ -406,20 +447,29 @@ fn render_lyrics(frame: &mut Frame, state: &AppState, area: Rect) {
 fn render_album_art_rect(frame: &mut Frame, state: &AppState, art_area: Rect) {
     if let Some(img) = &state.album_art {
         // Redimensionar para encajar en los caracteres (FilterType::Triangle para velocidad/calidad)
-        let scaled = image::imageops::resize(img, art_area.width as u32, (art_area.height * 2) as u32, image::imageops::FilterType::Triangle);
-        
+        let scaled = image::imageops::resize(
+            img,
+            art_area.width as u32,
+            (art_area.height * 2) as u32,
+            image::imageops::FilterType::Triangle,
+        );
+
         let mut lines = Vec::new();
         for y in (0..scaled.height()).step_by(2) {
             let mut spans = Vec::new();
             for x in 0..scaled.width() {
                 let top = scaled.get_pixel(x, y);
-                let bottom = if y + 1 < scaled.height() { scaled.get_pixel(x, y + 1) } else { top };
-                
+                let bottom = if y + 1 < scaled.height() {
+                    scaled.get_pixel(x, y + 1)
+                } else {
+                    top
+                };
+
                 spans.push(Span::styled(
                     "▀",
                     Style::default()
                         .fg(Color::Rgb(top[0], top[1], top[2]))
-                        .bg(Color::Rgb(bottom[0], bottom[1], bottom[2]))
+                        .bg(Color::Rgb(bottom[0], bottom[1], bottom[2])),
                 ));
             }
             lines.push(Line::from(spans));
@@ -429,30 +479,46 @@ fn render_album_art_rect(frame: &mut Frame, state: &AppState, art_area: Rect) {
     }
 }
 
-fn render_track_info_rect(frame: &mut Frame, state: &AppState, info_area: Rect, alignment: Alignment) {
+fn render_track_info_rect(
+    frame: &mut Frame,
+    state: &AppState,
+    info_area: Rect,
+    alignment: Alignment,
+) {
     let status_icon = if state.is_playing { "▶" } else { "⏸" };
-    let title_line = Line::from(vec![
-        Span::styled(&state.track_title, Style::default().fg(state.theme.bright).add_modifier(Modifier::BOLD)),
-    ]);
-    
-    let artist_line = Line::from(Span::styled(&state.track_artist, Style::default().fg(state.theme.dim1)));
+    let title_line = Line::from(vec![Span::styled(
+        &state.track_title,
+        Style::default()
+            .fg(state.theme.bright)
+            .add_modifier(Modifier::BOLD),
+    )]);
+
+    let artist_line = Line::from(Span::styled(
+        &state.track_artist,
+        Style::default().fg(state.theme.dim1),
+    ));
 
     // Fila de botones de control (visual)
     let controls_line = Line::from(vec![
         Span::styled(" [P] ", Style::default().fg(state.theme.dim2)),
         Span::styled("⏮ ", Style::default().fg(state.theme.dim1)),
-        Span::styled(format!(" {} ", status_icon), Style::default().fg(state.theme.bright).add_modifier(Modifier::REVERSED)),
+        Span::styled(
+            format!(" {} ", status_icon),
+            Style::default()
+                .fg(state.theme.bright)
+                .add_modifier(Modifier::REVERSED),
+        ),
         Span::styled(" ⏭", Style::default().fg(state.theme.dim1)),
         Span::styled(" [N] ", Style::default().fg(state.theme.dim2)),
     ]);
 
     let mut lines = Vec::new();
-    
+
     // Solo añadir espacio superior si hay altura de sobra
     if info_area.height > 5 {
         lines.push(Line::from(""));
     }
-    
+
     lines.push(title_line);
     lines.push(artist_line);
 
@@ -460,20 +526,23 @@ fn render_track_info_rect(frame: &mut Frame, state: &AppState, info_area: Rect, 
     if info_area.height > 6 {
         lines.push(Line::from(""));
     }
-    
+
     lines.push(controls_line);
-    
+
     if info_area.height > 4 {
         lines.push(Line::from(vec![
             Span::styled("[Space] to ", Style::default().fg(state.theme.dim3)),
-            Span::styled(if state.is_playing { "pause" } else { "play" }, Style::default().fg(state.theme.dim2)),
+            Span::styled(
+                if state.is_playing { "pause" } else { "play" },
+                Style::default().fg(state.theme.dim2),
+            ),
         ]));
     }
 
     let widget = Paragraph::new(lines)
         .alignment(alignment)
         .wrap(Wrap { trim: false });
-        
+
     frame.render_widget(widget, info_area);
 }
 
@@ -491,43 +560,50 @@ fn render_progress_bar(frame: &mut Frame, state: &AppState, area: Rect) {
 
     let pos_ms = state.interpolated_pos_ms();
     let progress = (pos_ms as f64 / state.duration_ms as f64).clamp(0.0, 1.0);
-    
+
     let time_curr = format_time(pos_ms);
     let time_total = format_time(state.duration_ms);
-    
+
     let text_width = 14; // "MM:SS  " y "  MM:SS" (7 cada uno)
     let width = area.width as usize;
-    if width <= text_width { return; }
-    
+    if width <= text_width {
+        return;
+    }
+
     let bar_width = width - text_width;
     let filled_width = (bar_width as f64 * progress).round() as usize;
     let mut line_spans = Vec::new();
-    
+
     // Tiempo actual
-    line_spans.push(Span::styled(format!("{}  ", time_curr), Style::default().fg(state.theme.dim1)));
-    
+    line_spans.push(Span::styled(
+        format!("{}  ", time_curr),
+        Style::default().fg(state.theme.dim1),
+    ));
+
     // Braille progress
     if filled_width > 0 {
         line_spans.push(Span::styled(
             "⣿".repeat(filled_width),
-            Style::default().fg(state.theme.bright)
+            Style::default().fg(state.theme.bright),
         ));
     }
-    
+
     let empty_width = bar_width.saturating_sub(filled_width);
     if empty_width > 0 {
         line_spans.push(Span::styled(
             "⣀".repeat(empty_width),
-            Style::default().fg(state.theme.dim3)
+            Style::default().fg(state.theme.dim3),
         ));
     }
-    
+
     // Tiempo total
-    line_spans.push(Span::styled(format!("  {}", time_total), Style::default().fg(state.theme.dim1)));
+    line_spans.push(Span::styled(
+        format!("  {}", time_total),
+        Style::default().fg(state.theme.dim1),
+    ));
 
     frame.render_widget(Paragraph::new(Line::from(line_spans)), area);
 }
-
 
 // ── Setup / teardown del terminal ─────────────────────────────────────────────
 
@@ -553,7 +629,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> anyhow
 // ── Loop principal ────────────────────────────────────────────────────────────
 
 /// Inicializa el terminal, arranca el loop de renderizado y maneja el cleanup.
-pub async fn run(mut rx: Receiver<AppEvent>, theme: Theme) -> anyhow::Result<()> {
+pub async fn run(mut rx: Receiver<AppEvent>, theme: Theme, player: String) -> anyhow::Result<()> {
     let mut terminal = setup_terminal()?;
     let mut state = AppState::new(theme);
     let frame_duration = Duration::from_millis(16); // ~60 FPS
@@ -574,21 +650,23 @@ pub async fn run(mut rx: Receiver<AppEvent>, theme: Theme) -> anyhow::Result<()>
                 if key.kind == event::KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => break,
-                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            break;
+                        }
                         KeyCode::Char(' ') => {
-                            crate::mpris::toggle_play_pause().await;
+                            crate::mpris::toggle_play_pause(&player).await;
                         }
                         KeyCode::Char('n') | KeyCode::Char('N') => {
-                            crate::mpris::next_track().await;
+                            crate::mpris::next_track(&player).await;
                         }
                         KeyCode::Char('p') | KeyCode::Char('P') => {
-                            crate::mpris::previous_track().await;
+                            crate::mpris::previous_track(&player).await;
                         }
                         KeyCode::Right => {
-                            crate::mpris::seek_relative(5_000_000).await;
+                            crate::mpris::seek_relative(5_000_000, &player).await;
                         }
                         KeyCode::Left => {
-                            crate::mpris::seek_relative(-5_000_000).await;
+                            crate::mpris::seek_relative(-5_000_000, &player).await;
                         }
                         _ => {}
                     }
@@ -600,13 +678,20 @@ pub async fn run(mut rx: Receiver<AppEvent>, theme: Theme) -> anyhow::Result<()>
         let mut target_offset = state.current_line.unwrap_or(0) as f64;
         let pos = state.interpolated_pos_ms();
         state.is_instrumental = false;
-        
+
         if let Some(curr) = state.current_line {
-            if let (Some(curr_lyric), Some(next_lyric)) = (state.lyrics.get(curr), state.lyrics.get(curr + 1)) {
+            if let (Some(curr_lyric), Some(next_lyric)) =
+                (state.lyrics.get(curr), state.lyrics.get(curr + 1))
+            {
                 // Si la distancia total entre actual y siguiente es > 15s
-                if next_lyric.timestamp_ms.saturating_sub(curr_lyric.timestamp_ms) > 15000 {
+                if next_lyric
+                    .timestamp_ms
+                    .saturating_sub(curr_lyric.timestamp_ms)
+                    > 15000
+                {
                     // Si pasaron 5s de la actual, y faltan más de 2s para la siguiente
-                    if pos > curr_lyric.timestamp_ms + 5000 && pos + 2000 < next_lyric.timestamp_ms {
+                    if pos > curr_lyric.timestamp_ms + 5000 && pos + 2000 < next_lyric.timestamp_ms
+                    {
                         state.is_instrumental = true;
                         target_offset += 0.5; // Apuntar visualmente al medio
                     }

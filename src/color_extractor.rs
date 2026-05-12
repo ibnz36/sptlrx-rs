@@ -41,7 +41,7 @@ pub async fn get_dominant_color(url: &str) -> Option<(Color, image::RgbImage)> {
         let max_val = r.max(g).max(b);
         let min_val = r.min(g).min(b);
         let saturation = max_val.saturating_sub(min_val);
-        
+
         // Multiplicador de "vistosidad": preferimos colores saturados
         let score = count * (1 + saturation as usize);
 

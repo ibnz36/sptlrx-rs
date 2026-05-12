@@ -3,11 +3,11 @@ use std::time::Duration;
 use serde::Deserialize;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
-use crate::{lyrics::parse_lrc, AppEvent, TrackInfo};
+use crate::{AppEvent, TrackInfo, lyrics::parse_lrc};
 
 // ── Respuesta de LRCLIB ───────────────────────────────────────────────────────
 
@@ -21,8 +21,16 @@ struct LrcLibResult {
 
 /// Patrones de ruido dentro de paréntesis/corchetes.
 const NOISE_WORDS: [&str; 10] = [
-    "remaster", "deluxe", "bonus", "explicit", "live",
-    "anniversary", "edition", "expanded", "stereo", "mono",
+    "remaster",
+    "deluxe",
+    "bonus",
+    "explicit",
+    "live",
+    "anniversary",
+    "edition",
+    "expanded",
+    "stereo",
+    "mono",
 ];
 
 /// Limpia títulos de Spotify: elimina "(Remastered 2011)", "- Live", etc.
@@ -33,7 +41,9 @@ fn clean_title(title: &str) -> String {
     for (open, close) in [('(', ')'), ('[', ']')] {
         loop {
             let Some(start) = s.find(open) else { break };
-            let Some(rel_end) = s[start..].find(close) else { break };
+            let Some(rel_end) = s[start..].find(close) else {
+                break;
+            };
             let end = start + rel_end + 1;
             let inner = s[start + 1..end - 1].to_lowercase();
             if NOISE_WORDS.iter().any(|w| inner.contains(w)) {
@@ -63,10 +73,7 @@ fn primary_artist(artist: &str) -> &str {
 
 // ── Fetch de letras ───────────────────────────────────────────────────────────
 
-async fn fetch_from_lrclib(
-    client: &reqwest::Client,
-    track: &TrackInfo,
-) -> Option<String> {
+async fn fetch_from_lrclib(client: &reqwest::Client, track: &TrackInfo) -> Option<String> {
     let title = clean_title(&track.title);
     let artist = primary_artist(&track.artist);
     let duration_secs = (track.duration_ms / 1000).to_string();
@@ -94,10 +101,7 @@ async fn fetch_from_lrclib(
     // Intento 2: búsqueda sin duración (más flexible)
     let resp = client
         .get("https://lrclib.net/api/search")
-        .query(&[
-            ("artist_name", artist),
-            ("track_name", title.as_str()),
-        ])
+        .query(&[("artist_name", artist), ("track_name", title.as_str())])
         .send()
         .await
         .ok()?;

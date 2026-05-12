@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::fs;
 
-use crate::theme::{hex_to_color, Theme};
+use crate::theme::{Theme, hex_to_color};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -52,12 +52,29 @@ impl Config {
         // Sobreescribir con custom si existe y se eligió 'custom'
         if self.theme.as_deref() == Some("custom") {
             if let Some(custom) = &self.custom {
-                if let Some(accent) = &custom.accent { theme.accent = hex_to_color(accent); }
-                if let Some(text) = &custom.text { theme.bright = hex_to_color(text); }
-                if let Some(dim1) = &custom.dim1 { theme.dim1 = hex_to_color(dim1); }
-                if let Some(dim2) = &custom.dim2 { theme.dim2 = hex_to_color(dim2); }
-                if let Some(dim3) = &custom.dim3 { theme.dim3 = hex_to_color(dim3); }
-                if let Some(bar) = &custom.bar { theme.bar = hex_to_color(bar); }
+                if let Some(accent) = &custom.accent {
+                    theme.accent = hex_to_color(accent);
+                }
+
+                if let Some(text) = &custom.text {
+                    theme.bright = hex_to_color(text);
+                }
+
+                if let Some(dim1) = &custom.dim1 {
+                    theme.dim1 = hex_to_color(dim1);
+                }
+
+                if let Some(dim2) = &custom.dim2 {
+                    theme.dim2 = hex_to_color(dim2);
+                }
+
+                if let Some(dim3) = &custom.dim3 {
+                    theme.dim3 = hex_to_color(dim3);
+                }
+
+                if let Some(bar) = &custom.bar {
+                    theme.bar = hex_to_color(bar);
+                }
             }
         }
 
